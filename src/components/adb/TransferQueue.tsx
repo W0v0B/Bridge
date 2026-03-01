@@ -1,25 +1,82 @@
+import { useState, useCallback, useRef, useEffect } from "react";
 import { List, Progress } from "antd";
-
-interface Transfer {
-  id: string;
-  name: string;
-  progress: number;
-  status: "pending" | "transferring" | "completed" | "error";
-}
+import { useTransferEvents } from "../../hooks/useAdbEvents";
+import type { TransferProgress } from "../../types/adb";
 
 export function TransferQueue() {
-  const transfers: Transfer[] = [];
+  const [transfers, setTransfers] = useState<Map<string, TransferProgress>>(
+    new Map()
+  );
+  const timersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(
+    new Map()
+  );
+
+  const handleProgress = useCallback((progress: TransferProgress) => {
+    setTransfers((prev) => {
+      const next = new Map(prev);
+      next.set(progress.id, progress);
+      return next;
+    });
+
+    // Auto-remove completed transfers after 3 seconds
+    if (progress.percent >= 100) {
+      const existing = timersRef.current.get(progress.id);
+      if (existing) clearTimeout(existing);
+
+      timersRef.current.set(
+        progress.id,
+        setTimeout(() => {
+          setTransfers((prev) => {
+            const next = new Map(prev);
+            next.delete(progress.id);
+            return next;
+          });
+          timersRef.current.delete(progress.id);
+        }, 3000)
+      );
+    }
+  }, []);
+
+  useTransferEvents(handleProgress);
+
+  // Cleanup timers on unmount
+  useEffect(() => {
+    return () => {
+      timersRef.current.forEach((t) => clearTimeout(t));
+    };
+  }, []);
+
+  const items = Array.from(transfers.values());
+
+  if (items.length === 0) return null;
 
   return (
-    <List
-      dataSource={transfers}
-      renderItem={(item) => (
-        <List.Item>
-          <List.Item.Meta title={item.name} description={item.status} />
-          <Progress percent={item.progress} size="small" style={{ width: 100 }} />
-        </List.Item>
-      )}
-      locale={{ emptyText: "No active transfers" }}
-    />
+    <div
+      style={{
+        padding: "8px 16px",
+        background: "#fff",
+        borderTop: "1px solid #f0f0f0",
+      }}
+    >
+      <List
+        size="small"
+        dataSource={items}
+        renderItem={(item) => (
+          <List.Item style={{ padding: "4px 0" }}>
+            <List.Item.Meta
+              title={
+                <span style={{ fontSize: 12 }}>{item.file_name}</span>
+              }
+            />
+            <Progress
+              percent={Math.round(item.percent)}
+              size="small"
+              style={{ width: 200 }}
+              status={item.percent >= 100 ? "success" : "active"}
+            />
+          </List.Item>
+        )}
+      />
+    </div>
   );
 }
