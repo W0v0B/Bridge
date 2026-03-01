@@ -3,16 +3,17 @@ import { Button, Input, Space, Typography, message } from "antd";
 import { DeleteOutlined, SendOutlined, PlusOutlined } from "@ant-design/icons";
 import { useCommandStore } from "../../store/commandStore";
 import { useDeviceStore } from "../../store/deviceStore";
-import { runShellCommand } from "../../utils/adb";
+import { startShellStream } from "../../utils/adb";
 import { writeToPort } from "../../utils/serial";
 
 const { Text } = Typography;
 
 interface QuickCommandsPanelProps {
   onOutput?: (text: string) => void;
+  onStreamStart?: () => void;
 }
 
-export function QuickCommandsPanel({ onOutput }: QuickCommandsPanelProps) {
+export function QuickCommandsPanel({ onOutput, onStreamStart }: QuickCommandsPanelProps) {
   const commands = useCommandStore((s) => s.commands);
   const addCommand = useCommandStore((s) => s.addCommand);
   const removeCommand = useCommandStore((s) => s.removeCommand);
@@ -31,8 +32,9 @@ export function QuickCommandsPanel({ onOutput }: QuickCommandsPanelProps) {
     }
     try {
       if (selectedDevice.type === "adb") {
-        const result = await runShellCommand(selectedDevice.serial, command);
-        onOutput?.(`$ ${command}\n${result}\n`);
+        onOutput?.(`$ ${command}\n`);
+        onStreamStart?.();
+        await startShellStream(selectedDevice.serial, command);
       } else {
         onOutput?.(`> ${command}\n`);
         await writeToPort(selectedDevice.serial, command + "\r\n");

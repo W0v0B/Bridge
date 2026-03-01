@@ -1,4 +1,11 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Mutex;
+
+use once_cell::sync::Lazy;
+use serde::Serialize;
+use tauri::{AppHandle, Emitter};
+use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
 /// Resolve the path to the ADB executable.
@@ -48,6 +55,22 @@ pub fn adb_path() -> String {
     "adb".to_string()
 }
 
+/// Store PIDs of running shell stream processes, keyed by "shell:{serial}"
+static SHELL_PROCESSES: Lazy<Mutex<HashMap<String, u32>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ShellOutput {
+    pub serial: String,
+    pub data: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ShellExit {
+    pub serial: String,
+    pub code: i32,
+}
+
 /// Run an ADB command with the given arguments and return stdout.
 pub async fn run_adb(args: &[&str]) -> Result<String, String> {
     let output = Command::new(adb_path())
@@ -89,4 +112,103 @@ pub async fn reboot(serial: &str, mode: Option<&str>) -> Result<(), String> {
 pub async fn install_apk(serial: &str, apk_path: &str) -> Result<(), String> {
     run_adb(&["-s", serial, "install", "-r", apk_path]).await?;
     Ok(())
+}
+
+/// Start a streaming shell command, emitting `shell_output` and `shell_exit` events.
+pub async fn start_shell_stream(
+    serial: &str,
+    command: &str,
+    app: AppHandle,
+) -> Result<(), String> {
+    let key = format!("shell:{}", serial);
+
+    // Stop any existing stream for this device
+    let old_pid = {
+        let mut procs = SHELL_PROCESSES.lock().map_err(|e| e.to_string())?;
+        procs.remove(&key)
+    };
+    if let Some(pid) = old_pid {
+        let _ = Command::new("taskkill")
+            .args(["/F", "/T", "/PID", &pid.to_string()])
+            .output()
+            .await;
+    }
+
+    let mut child = Command::new(adb_path())
+        .args(["-s", serial, "shell", command])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|e| format!("Failed to start shell stream: {}", e))?;
+
+    let pid = child.id().ok_or("Failed to get shell process PID")?;
+
+    {
+        let mut procs = SHELL_PROCESSES.lock().map_err(|e| e.to_string())?;
+        procs.insert(key.clone(), pid);
+    }
+
+    let serial_owned = serial.to_string();
+
+    tokio::spawn(async move {
+        if let Some(mut stdout) = child.stdout.take() {
+            let mut buf = vec![0u8; 8192];
+            loop {
+                match stdout.read(&mut buf).await {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        let data = String::from_utf8_lossy(&buf[..n]).to_string();
+                        let _ = app.emit(
+                            "shell_output",
+                            ShellOutput {
+                                serial: serial_owned.clone(),
+                                data,
+                            },
+                        );
+                    }
+                    Err(_) => break,
+                }
+            }
+        }
+
+        // Wait for exit status
+        let code = match child.wait().await {
+            Ok(status) => status.code().unwrap_or(-1),
+            Err(_) => -1,
+        };
+
+        let _ = app.emit(
+            "shell_exit",
+            ShellExit {
+                serial: serial_owned.clone(),
+                code,
+            },
+        );
+
+        // Clean up
+        let mut procs = SHELL_PROCESSES.lock().unwrap();
+        procs.remove(&format!("shell:{}", serial_owned));
+    });
+
+    Ok(())
+}
+
+/// Stop a running shell stream for a device.
+pub async fn stop_shell_stream(serial: &str) -> Result<(), String> {
+    let key = format!("shell:{}", serial);
+    let pid = {
+        let mut procs = SHELL_PROCESSES.lock().map_err(|e| e.to_string())?;
+        procs.remove(&key)
+    };
+
+    if let Some(pid) = pid {
+        let _ = Command::new("taskkill")
+            .args(["/F", "/T", "/PID", &pid.to_string()])
+            .output()
+            .await;
+        Ok(())
+    } else {
+        Err("No shell stream running for this device".to_string())
+    }
 }

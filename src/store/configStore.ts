@@ -4,6 +4,7 @@ interface Config {
   adbPath: string;
   theme: "dark" | "light";
   autoConnect: boolean;
+  shellMaxLines: number;
 }
 
 interface ConfigState {
@@ -16,6 +17,7 @@ export const useConfigStore = create<ConfigState>((set) => ({
     adbPath: "",
     theme: "dark",
     autoConnect: true,
+    shellMaxLines: 5000,
   },
   setConfig: (partial) => set((state) => ({ config: { ...state.config, ...partial } })),
 }));

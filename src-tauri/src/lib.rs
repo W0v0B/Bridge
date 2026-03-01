@@ -28,6 +28,8 @@ pub fn run() {
             delete_file,
             // ADB shell/utility commands
             run_shell_command,
+            start_shell_stream,
+            stop_shell_stream,
             // ADB logcat commands
             start_logcat,
             stop_logcat,
@@ -98,6 +100,20 @@ async fn delete_file(serial: String, path: String) -> Result<(), String> {
 #[tauri::command]
 async fn run_shell_command(serial: String, command: String) -> Result<String, String> {
     commands::run_shell(&serial, &command).await
+}
+
+#[tauri::command]
+async fn start_shell_stream(
+    serial: String,
+    command: String,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    commands::start_shell_stream(&serial, &command, app).await
+}
+
+#[tauri::command]
+async fn stop_shell_stream(serial: String) -> Result<(), String> {
+    commands::stop_shell_stream(&serial).await
 }
 
 // ── ADB Logcat Commands ──

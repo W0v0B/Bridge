@@ -1,10 +1,13 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Input, Typography } from "antd";
+import { Input, Button, InputNumber, Tooltip, Typography } from "antd";
+import { StopOutlined, ClearOutlined, SettingOutlined } from "@ant-design/icons";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { useDeviceStore } from "../../store/deviceStore";
-import { runShellCommand } from "../../utils/adb";
+import { useConfigStore } from "../../store/configStore";
+import { startShellStream, stopShellStream } from "../../utils/adb";
 import { writeToPort } from "../../utils/serial";
 import { useSerialData } from "../../hooks/useSerialEvents";
+import { useShellOutput, useShellExit } from "../../hooks/useShellEvents";
 import { QuickCommandsPanel } from "./QuickCommandsPanel";
 
 const { Text } = Typography;
@@ -13,18 +16,43 @@ export function ShellPanel() {
   const selectedDeviceId = useDeviceStore((s) => s.selectedDeviceId);
   const devices = useDeviceStore((s) => s.devices);
   const selectedDevice = devices.find((d) => d.id === selectedDeviceId);
+  const shellMaxLines = useConfigStore((s) => s.config.shellMaxLines);
+  const setConfig = useConfigStore((s) => s.setConfig);
 
   const outputMap = useRef<Record<string, string>>({});
+  const inputMap = useRef<Record<string, string>>({});
+  const runningMap = useRef<Record<string, boolean>>({});
   const [output, setOutput] = useState("");
   const [input, setInput] = useState("");
   const [running, setRunning] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const outputRef = useRef<HTMLDivElement>(null);
+  const rafId = useRef<number>(0);
+  const pendingFlush = useRef(false);
+  const maxLinesRef = useRef(shellMaxLines);
+  maxLinesRef.current = shellMaxLines;
 
-  // Sync output state when switching devices
+  /** Keep only the last N lines of a string buffer. */
+  const trimToMaxLines = useCallback((text: string): string => {
+    const max = maxLinesRef.current;
+    if (max <= 0) return text; // 0 = unlimited
+    // Fast path: count newlines from the end
+    let count = 0;
+    let idx = text.length;
+    while (idx > 0 && count < max) {
+      idx = text.lastIndexOf("\n", idx - 1);
+      if (idx === -1) { idx = 0; break; }
+      count++;
+    }
+    return idx > 0 ? text.slice(idx + 1) : text;
+  }, []);
+
+  // Sync per-device state when switching devices
   useEffect(() => {
     if (selectedDeviceId) {
       setOutput(outputMap.current[selectedDeviceId] ?? "");
-      setInput("");
+      setInput(inputMap.current[selectedDeviceId] ?? "");
+      setRunning(runningMap.current[selectedDeviceId] ?? false);
     }
   }, [selectedDeviceId]);
 
@@ -34,10 +62,36 @@ export function ShellPanel() {
     }
   }, [output]);
 
+  // Schedule a batched render — at most once per animation frame
+  const scheduleFlush = useCallback(() => {
+    if (pendingFlush.current) return;
+    pendingFlush.current = true;
+    rafId.current = requestAnimationFrame(() => {
+      pendingFlush.current = false;
+      if (selectedDeviceId) {
+        setOutput(outputMap.current[selectedDeviceId] ?? "");
+      }
+    });
+  }, [selectedDeviceId]);
+
+  useEffect(() => {
+    return () => cancelAnimationFrame(rafId.current);
+  }, []);
+
   const appendOutput = useCallback((text: string) => {
     if (!selectedDeviceId) return;
-    outputMap.current[selectedDeviceId] = (outputMap.current[selectedDeviceId] ?? "") + text;
-    setOutput(outputMap.current[selectedDeviceId]);
+    outputMap.current[selectedDeviceId] = trimToMaxLines(
+      (outputMap.current[selectedDeviceId] ?? "") + text
+    );
+    scheduleFlush();
+  }, [selectedDeviceId, scheduleFlush, trimToMaxLines]);
+
+  const setDeviceRunning = useCallback((deviceId: string, value: boolean) => {
+    runningMap.current[deviceId] = value;
+    // Only update visible state if this device is currently selected
+    if (deviceId === selectedDeviceId) {
+      setRunning(value);
+    }
   }, [selectedDeviceId]);
 
   // Subscribe to incoming serial data
@@ -45,28 +99,71 @@ export function ShellPanel() {
     (event: { port: string; data: string }) => {
       if (selectedDevice?.type === "serial" && selectedDevice.serial === event.port) {
         const deviceId = selectedDevice.id;
-        outputMap.current[deviceId] = (outputMap.current[deviceId] ?? "") + event.data;
-        setOutput(outputMap.current[deviceId]);
+        outputMap.current[deviceId] = trimToMaxLines(
+          (outputMap.current[deviceId] ?? "") + event.data
+        );
+        scheduleFlush();
       }
     },
-    [selectedDevice]
+    [selectedDevice, scheduleFlush, trimToMaxLines]
   );
   useSerialData(handleSerialData);
+
+  // Subscribe to shell streaming events
+  useShellOutput(
+    useCallback(
+      (event) => {
+        // Find the device by serial to get the correct outputMap key
+        const device = devices.find(
+          (d) => d.type === "adb" && d.serial === event.serial
+        );
+        if (!device) return;
+        const key = device.id;
+        outputMap.current[key] = trimToMaxLines(
+          (outputMap.current[key] ?? "") + event.data
+        );
+        // Only schedule render if this device is selected
+        if (key === selectedDeviceId) {
+          scheduleFlush();
+        }
+      },
+      [devices, selectedDeviceId, scheduleFlush, trimToMaxLines]
+    )
+  );
+
+  useShellExit(
+    useCallback(
+      (event) => {
+        const device = devices.find(
+          (d) => d.type === "adb" && d.serial === event.serial
+        );
+        if (!device) return;
+        const key = device.id;
+        const exitLine = `\n[Process exited with code ${event.code}]\n`;
+        outputMap.current[key] = (outputMap.current[key] ?? "") + exitLine;
+        setDeviceRunning(key, false);
+        if (key === selectedDeviceId) {
+          scheduleFlush();
+        }
+      },
+      [devices, selectedDeviceId, scheduleFlush, setDeviceRunning]
+    )
+  );
 
   const handleCommand = async () => {
     const cmd = input.trim();
     if (!cmd || !selectedDevice) return;
 
     setInput("");
+    if (selectedDeviceId) inputMap.current[selectedDeviceId] = "";
     if (selectedDevice.type === "adb") {
-      setRunning(true);
+      appendOutput(`$ ${cmd}\n`);
+      setDeviceRunning(selectedDevice.id, true);
       try {
-        const result = await runShellCommand(selectedDevice.serial, cmd);
-        appendOutput(`$ ${cmd}\n${result}\n`);
+        await startShellStream(selectedDevice.serial, cmd);
       } catch (e) {
-        appendOutput(`$ ${cmd}\nError: ${e}\n`);
-      } finally {
-        setRunning(false);
+        appendOutput(`Error: ${e}\n`);
+        setDeviceRunning(selectedDevice.id, false);
       }
     } else {
       appendOutput(`> ${cmd}\n`);
@@ -76,6 +173,21 @@ export function ShellPanel() {
         appendOutput(`Error: ${e}\n`);
       }
     }
+  };
+
+  const handleStop = async () => {
+    if (!selectedDevice) return;
+    try {
+      await stopShellStream(selectedDevice.serial);
+    } catch {
+      // Process may have already exited
+    }
+  };
+
+  const handleClear = () => {
+    if (!selectedDeviceId) return;
+    outputMap.current[selectedDeviceId] = "";
+    setOutput("");
   };
 
   if (!selectedDevice) {
@@ -130,10 +242,43 @@ export function ShellPanel() {
                 background: "#52c41a",
               }}
             />
-            <Text style={{ color: "#ccc", fontSize: 12 }}>
+            <Text style={{ color: "#ccc", fontSize: 12, flex: 1 }}>
               {selectedDevice.type === "adb" ? "adb shell" : "serial"} —{" "}
               {selectedDevice.name}
             </Text>
+            {showSettings && (
+              <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                <Text style={{ color: "#999", fontSize: 11, whiteSpace: "nowrap" }}>
+                  Max lines
+                </Text>
+                <InputNumber
+                  size="small"
+                  min={0}
+                  max={100000}
+                  step={1000}
+                  value={shellMaxLines}
+                  onChange={(v) => setConfig({ shellMaxLines: v ?? 5000 })}
+                  style={{ width: 80 }}
+                />
+                <Text style={{ color: "#666", fontSize: 10 }}>0=unlimited</Text>
+              </div>
+            )}
+            <Tooltip title="Settings">
+              <Button
+                size="small"
+                type="text"
+                icon={<SettingOutlined style={{ color: showSettings ? "#1890ff" : "#999" }} />}
+                onClick={() => setShowSettings((v) => !v)}
+              />
+            </Tooltip>
+            <Tooltip title="Clear">
+              <Button
+                size="small"
+                type="text"
+                icon={<ClearOutlined style={{ color: "#999" }} />}
+                onClick={handleClear}
+              />
+            </Tooltip>
           </div>
 
           {/* Output area */}
@@ -160,11 +305,17 @@ export function ShellPanel() {
               padding: "8px 12px",
               borderTop: "1px solid #404040",
               background: "#2d2d2d",
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
             }}
           >
             <Input
               value={input}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={(e) => {
+                setInput(e.target.value);
+                if (selectedDeviceId) inputMap.current[selectedDeviceId] = e.target.value;
+              }}
               onPressEnter={handleCommand}
               placeholder={
                 selectedDevice.type === "adb"
@@ -174,6 +325,7 @@ export function ShellPanel() {
               disabled={running}
               variant="borderless"
               style={{
+                flex: 1,
                 fontFamily: "monospace",
                 fontSize: 13,
                 color: "#d4d4d4",
@@ -185,6 +337,17 @@ export function ShellPanel() {
                 </span>
               }
             />
+            {running && (
+              <Button
+                size="small"
+                danger
+                type="primary"
+                icon={<StopOutlined />}
+                onClick={handleStop}
+              >
+                Stop
+              </Button>
+            )}
           </div>
         </div>
       </Panel>
@@ -198,7 +361,12 @@ export function ShellPanel() {
       />
 
       <Panel defaultSize={30} minSize={20}>
-        <QuickCommandsPanel onOutput={appendOutput} />
+        <QuickCommandsPanel
+          onOutput={appendOutput}
+          onStreamStart={() => {
+            if (selectedDevice) setDeviceRunning(selectedDevice.id, true);
+          }}
+        />
       </Panel>
     </PanelGroup>
     </div>

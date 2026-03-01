@@ -1,7 +1,7 @@
 # ADB & Serial Debug Tool — Design Document
 
 > **Project Name**: DevBridge (tentative)
-> **Document Version**: v1.1
+> **Document Version**: v1.2
 > **Author**: Personal Project
 > **Tech Stack**: Tauri 2 + Rust + React + TypeScript
 > **Last Updated**: 2026-03
@@ -132,6 +132,7 @@ tokio Runtime
 │
 ├── Task: adb_device_watcher     # Polls `adb devices` every 2s; emits on change
 ├── Task: logcat_reader          # Streams adb logcat stdout line-by-line; emits each line
+├── Task: shell_stream_reader    # Streams adb shell stdout in chunks; emits shell_output/shell_exit
 ├── Task: file_transfer          # Streams push/pull progress; emits progress updates
 
 std::thread (native)
@@ -246,6 +247,46 @@ interface LogcatFilter {
 }
 ```
 
+#### 4.1.4 Shell Streaming
+
+All ADB shell commands use a streaming execution model. Instead of blocking until a command exits, the backend spawns the process, reads stdout in chunks, and emits real-time events. This enables long-running commands (e.g. `logcat`, `top`, `tcpdump`) to stream output and be cancelled via a Stop button.
+
+```rust
+// Process-global PID map for one active stream per device
+static SHELL_PROCESSES: Lazy<Mutex<HashMap<String, u32>>>
+
+#[tauri::command]
+async fn start_shell_stream(serial: String, command: String, app: AppHandle) -> Result<(), String>
+// 1. If a process already exists for "shell:{serial}", kills it first (auto-stop previous)
+// 2. Spawns `adb -s {serial} shell {command}` with stdout piped, stderr null, kill_on_drop
+// 3. Stores PID in SHELL_PROCESSES
+// 4. Spawns tokio task that reads stdout in 8KB chunks and emits("shell_output", ShellOutput)
+// 5. On process exit, emits("shell_exit", ShellExit) and removes PID from map
+
+#[tauri::command]
+async fn stop_shell_stream(serial: String) -> Result<(), String>
+// Removes PID from SHELL_PROCESSES and kills the process tree via `taskkill /F /T /PID`
+```
+
+```typescript
+// Event payloads
+interface ShellOutput {
+  serial: string;
+  data: string;     // Raw chunk (may contain multiple lines)
+}
+
+interface ShellExit {
+  serial: string;
+  code: number;
+}
+```
+
+> **Design decisions**:
+> - **Chunk-based reading** instead of line-by-line: stdout is read in 8KB chunks via `AsyncReadExt::read()`, which naturally batches high-throughput output (e.g. logcat) into fewer IPC events, dramatically reducing overhead.
+> - **Process tree kill**: Uses `taskkill /F /T /PID` on Windows to kill the entire process tree, not just the top-level `adb.exe` client.
+> - **`kill_on_drop(true)`**: Safety net so the child process is automatically killed if the tokio task panics or is aborted.
+> - **One stream per device**: Starting a new stream on the same device auto-stops the previous one. This avoids orphaned processes.
+
 ### 4.2 Serial Module
 
 #### 4.2.1 Serial Port Management
@@ -300,7 +341,7 @@ interface QuickCommand {
 }
 ```
 
-- **ADB devices**: quick command runs via `runShellCommand()` and appends output
+- **ADB devices**: quick command runs via `startShellStream()` — output streams in real-time via `shell_output` events; sets the shell running state so the Stop button appears
 - **Serial devices**: quick command sends via `writeToPort(command + "\r\n")` — response arrives asynchronously via `serial_data` events
 
 ### 4.3 Unified Device Model
@@ -352,6 +393,9 @@ Stored via `tauri-plugin-store` at `%APPDATA%/DevBridge/config.json`.
       "command": "AT+RST"
     }
   ],
+  "shell": {
+    "max_lines": 5000       // Output buffer limit per device (0 = unlimited)
+  },
   "logcat": {
     "max_lines": 5000,
     "default_filter_level": "D"
@@ -390,29 +434,42 @@ Stored via `tauri-plugin-store` at `%APPDATA%/DevBridge/config.json`.
 ### 6.2 Shell Tab Layout (Unified for ADB + Serial)
 
 ```
-┌──────────────────────────────────┬──────────────────────────────┐
-│      Terminal Output (div)       │    Quick Command Panel       │
-│                                  │                              │
-│  Connected to COM3               │  ┌────────────────────────┐  │
-│  Type a command below.           │  │ Reset     [▶] [✕]      │  │
-│                                  │  │ AT+RST                 │  │
-│  > AT+GMR                        │  ├────────────────────────┤  │
-│  AT version:2.2.0.0              │  │ Version   [▶] [✕]      │  │
-│  SDK version:v3.4-22-g967752e    │  │ AT+GMR                 │  │
-│                                  │  └────────────────────────┘  │
-│  > AT+RST                        │                              │
-│  OK                              │  ┌────────────────────────┐  │
-│                                  │  │ Label: [____________]  │  │
-│                                  │  │ Cmd:   [____________]  │  │
-│──────────────────────────────────│  │ [+ Add Command]        │  │
-│ >/$ [___________________________]│  └────────────────────────┘  │
-└──────────────────────────────────┴──────────────────────────────┘
-
-- ADB devices: prefix "$", command runs synchronously, output appended inline
-- Serial devices: prefix ">", command sent via writeToPort(), response arrives
-  asynchronously via serial_data events and is appended to the output area
-- Panels are resizable via react-resizable-panels (default 70/30 split)
+┌──────────────────────────────────────────┬──────────────────────────────┐
+│ ● adb shell — Pixel 7     [⚙] [🗑 Clear]│    Quick Command Panel       │
+├──────────────────────────────────────────│                              │
+│  Connected to Pixel 7                    │  ┌────────────────────────┐  │
+│  Type a command below.                   │  │ Reset     [▶] [✕]      │  │
+│                                          │  │ AT+RST                 │  │
+│  $ logcat                                │  ├────────────────────────┤  │
+│  01-15 10:23:45.123  1234  5678 D Tag:…  │  │ Version   [▶] [✕]      │  │
+│  01-15 10:23:45.456  1234  5678 I Tag:…  │  │ AT+GMR                 │  │
+│  01-15 10:23:45.789  1234  5678 W Tag:…  │  └────────────────────────┘  │
+│  (streaming output...)                   │                              │
+│                                          │  ┌────────────────────────┐  │
+│  ┌─ Settings (collapsible) ──────────┐   │  │ Label: [____________]  │  │
+│  │ Max lines [5000▾]  0=unlimited    │   │  │ Cmd:   [____________]  │  │
+│  └───────────────────────────────────┘   │  │ [+ Add Command]        │  │
+│──────────────────────────────────────────│  └────────────────────────┘  │
+│ $ [______________________________] [Stop]│                              │
+└──────────────────────────────────────────┴──────────────────────────────┘
 ```
+
+**Execution model:**
+- **ADB devices**: prefix `$`. All commands execute via `startShellStream()` — output streams in real-time via `shell_output` events. A **Stop** button appears while a command is running, calling `stopShellStream()` to terminate it.
+- **Serial devices**: prefix `>`. Command sent via `writeToPort()`, response arrives asynchronously via `serial_data` events and is appended to the output area.
+- Panels are resizable via `react-resizable-panels` (default 70/30 split).
+
+**Per-device state:**
+- Output, input text, and running state are all tracked per-device via ref maps. Switching between devices preserves each device's shell session independently.
+- Quick Commands also trigger `startShellStream()` for ADB and correctly set the running state so the Stop button appears.
+
+**Header controls:**
+- **Settings toggle** (gear icon): reveals an inline `Max lines` setting (default 5000, range 0–100000, 0 = unlimited). The output buffer is trimmed to this limit to prevent DOM lag from unbounded log accumulation.
+- **Clear button** (trash icon): clears the current device's output buffer immediately.
+
+**Performance optimizations:**
+- Backend reads stdout in 8KB chunks instead of line-by-line, naturally batching high-throughput output into fewer IPC events.
+- Frontend uses `requestAnimationFrame`-based render batching — multiple data events within a single frame are coalesced into one React state update (~60fps max).
 
 ### 6.3 File Manager Tab Layout
 
@@ -489,7 +546,7 @@ Bundle `adb.exe`, `AdbWinApi.dll`, and `AdbWinUsbApi.dll` inside the app's `reso
 - [x] Batch file transfer + transfer queue UI
 - [x] Real-time logcat display + Tag/Level filtering
 - [x] Log export
-- [x] ADB shell command execution in Shell tab
+- [x] ADB shell command execution in Shell tab (streaming with stop/clear, per-device state)
 
 ### Phase 3 — Serial Features (Week 5–6)
 
@@ -564,7 +621,8 @@ DevBridge/
 │   │   └── configStore.ts      # zustand — app config
 │   ├── hooks/
 │   │   ├── useAdbEvents.ts     # Listen to ADB device change events
-│   │   └── useSerialEvents.ts  # useSerialData() + useSerialDisconnect() hooks
+│   │   ├── useSerialEvents.ts  # useSerialData() + useSerialDisconnect() hooks
+│   │   └── useShellEvents.ts   # useShellOutput() + useShellExit() hooks for streaming shell
 │   ├── utils/
 │   │   ├── adb.ts              # invoke wrappers for ADB commands
 │   │   └── serial.ts           # invoke wrappers for serial commands

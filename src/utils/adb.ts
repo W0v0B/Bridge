@@ -46,6 +46,14 @@ export async function runShellCommand(serial: string, command: string) {
   return invoke<string>("run_shell_command", { serial, command });
 }
 
+export async function startShellStream(serial: string, command: string) {
+  return invoke("start_shell_stream", { serial, command });
+}
+
+export async function stopShellStream(serial: string) {
+  return invoke("stop_shell_stream", { serial });
+}
+
 export async function startLogcat(serial: string, filter: LogcatFilter) {
   return invoke("start_logcat", { serial, filter });
 }
