@@ -2,9 +2,14 @@ use std::path::PathBuf;
 use tokio::process::Command;
 
 /// Resolve the path to the ADB executable.
-/// First checks for a bundled copy under resources/adb/adb.exe, then falls back to PATH.
+/// Search order:
+/// 1. Bundled copy under resources/adb/adb.exe (for distributed builds)
+/// 2. ANDROID_HOME/platform-tools/adb.exe
+/// 3. ANDROID_SDK_ROOT/platform-tools/adb.exe
+/// 4. LOCALAPPDATA/Android/Sdk/platform-tools/adb.exe (Android Studio default on Windows)
+/// 5. Fall back to "adb" on PATH
 pub fn adb_path() -> String {
-    // Check for bundled ADB relative to the executable
+    // 1. Check for bundled ADB relative to the executable
     if let Ok(exe_dir) = std::env::current_exe() {
         let bundled = exe_dir
             .parent()
@@ -16,7 +21,30 @@ pub fn adb_path() -> String {
             return bundled.to_string_lossy().to_string();
         }
     }
-    // Fall back to PATH
+
+    // 2–3. Check ANDROID_HOME and ANDROID_SDK_ROOT env vars
+    for var in &["ANDROID_HOME", "ANDROID_SDK_ROOT"] {
+        if let Ok(sdk) = std::env::var(var) {
+            let adb = PathBuf::from(&sdk).join("platform-tools").join("adb.exe");
+            if adb.exists() {
+                return adb.to_string_lossy().to_string();
+            }
+        }
+    }
+
+    // 4. Check Android Studio default install location on Windows
+    if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+        let adb = PathBuf::from(&local_app_data)
+            .join("Android")
+            .join("Sdk")
+            .join("platform-tools")
+            .join("adb.exe");
+        if adb.exists() {
+            return adb.to_string_lossy().to_string();
+        }
+    }
+
+    // 5. Fall back to PATH
     "adb".to_string()
 }
 

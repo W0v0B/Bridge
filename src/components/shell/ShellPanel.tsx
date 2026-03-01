@@ -14,10 +14,19 @@ export function ShellPanel() {
   const devices = useDeviceStore((s) => s.devices);
   const selectedDevice = devices.find((d) => d.id === selectedDeviceId);
 
+  const outputMap = useRef<Record<string, string>>({});
   const [output, setOutput] = useState("");
   const [input, setInput] = useState("");
   const [running, setRunning] = useState(false);
   const outputRef = useRef<HTMLDivElement>(null);
+
+  // Sync output state when switching devices
+  useEffect(() => {
+    if (selectedDeviceId) {
+      setOutput(outputMap.current[selectedDeviceId] ?? "");
+      setInput("");
+    }
+  }, [selectedDeviceId]);
 
   useEffect(() => {
     if (outputRef.current) {
@@ -26,14 +35,18 @@ export function ShellPanel() {
   }, [output]);
 
   const appendOutput = useCallback((text: string) => {
-    setOutput((prev) => prev + text);
-  }, []);
+    if (!selectedDeviceId) return;
+    outputMap.current[selectedDeviceId] = (outputMap.current[selectedDeviceId] ?? "") + text;
+    setOutput(outputMap.current[selectedDeviceId]);
+  }, [selectedDeviceId]);
 
   // Subscribe to incoming serial data
   const handleSerialData = useCallback(
     (event: { port: string; data: string }) => {
       if (selectedDevice?.type === "serial" && selectedDevice.serial === event.port) {
-        setOutput((prev) => prev + event.data);
+        const deviceId = selectedDevice.id;
+        outputMap.current[deviceId] = (outputMap.current[deviceId] ?? "") + event.data;
+        setOutput(outputMap.current[deviceId]);
       }
     },
     [selectedDevice]
@@ -69,10 +82,11 @@ export function ShellPanel() {
     return (
       <div
         style={{
+          position: "absolute",
+          inset: 0,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          height: "100%",
           color: "#8c8c8c",
         }}
       >
@@ -84,6 +98,7 @@ export function ShellPanel() {
   }
 
   return (
+    <div style={{ position: "absolute", inset: 0 }}>
     <PanelGroup direction="horizontal" style={{ height: "100%" }}>
       <Panel defaultSize={70} minSize={40}>
         <div
@@ -186,5 +201,6 @@ export function ShellPanel() {
         <QuickCommandsPanel onOutput={appendOutput} />
       </Panel>
     </PanelGroup>
+    </div>
   );
 }

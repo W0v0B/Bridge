@@ -31,17 +31,18 @@ function App() {
         token: { colorBgContainer: "#fff", borderRadius: 6 },
       }}
     >
-      <Layout style={{ minHeight: "100vh" }}>
+      <Layout style={{ height: "100vh", overflow: "hidden" }}>
         <Sider width={200} style={{ background: "#fff" }}>
           <Sidebar onConnect={() => setConnectModalOpen(true)} />
         </Sider>
-        <Layout>
+        <Layout style={{ minHeight: 0 }}>
           <Toolbar />
           <Content
             style={{
               padding: 16,
-              overflow: "auto",
+              overflow: "hidden",
               flex: 1,
+              minHeight: 0,
               display: "flex",
               flexDirection: "column",
             }}
