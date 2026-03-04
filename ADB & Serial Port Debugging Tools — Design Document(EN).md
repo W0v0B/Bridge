@@ -1,7 +1,7 @@
 # ADB & Serial Debug Tool — Design Document
 
 > **Project Name**: DevBridge (tentative)
-> **Document Version**: v1.2
+> **Document Version**: v1.3
 > **Author**: Personal Project
 > **Tech Stack**: Tauri 2 + Rust + React + TypeScript
 > **Last Updated**: 2026-03
@@ -220,11 +220,21 @@ interface TransferProgress {
 ```rust
 #[tauri::command]
 async fn start_logcat(serial: String, filter: LogcatFilter, app: AppHandle) -> Result<(), String>
-// Spawns `adb -s {serial} logcat` subprocess
-// Reads stdout line-by-line, parses into LogEntry, emits("logcat_line", LogEntry)
+// Spawns `adb -s {serial} logcat -v threadtime`
+// Parses stdout using a lenient regex that handles both `MM-DD` and `YYYY-MM-DD` timestamp prefixes
+// Batches parsed entries: emits("logcat_lines", Vec<LogEntry>) every 50ms or per 64 entries
 
 #[tauri::command]
 async fn stop_logcat(serial: String) -> Result<(), String>
+// Kills the logcat process via taskkill /F /T /PID (Windows; kills full process tree)
+
+#[tauri::command]
+async fn start_tlogcat(serial: String, app: AppHandle) -> Result<(), String>
+// Spawns `adb -s {serial} shell tlogcat`
+// Same batched-emit model; emits("tlogcat_lines", Vec<LogEntry>)
+
+#[tauri::command]
+async fn stop_tlogcat(serial: String) -> Result<(), String>
 
 #[tauri::command]
 async fn export_logs(logs: Vec<LogEntry>, path: String) -> Result<(), String>
@@ -233,19 +243,21 @@ async fn export_logs(logs: Vec<LogEntry>, path: String) -> Result<(), String>
 ```typescript
 interface LogEntry {
   timestamp: string;
-  pid: number;
-  tid: number;
+  pid: string;
+  tid: string;
   level: "V" | "D" | "I" | "W" | "E" | "F";
   tag: string;
   message: string;
 }
 
 interface LogcatFilter {
-  level?: string;
-  tags?: string[];      // Tag whitelist
-  keyword?: string;     // Keyword filter
+  level: string | null;   // null = show all levels
+  tags: string[] | null;  // null = no tag filter
+  keyword: string | null; // null = no keyword filter
 }
 ```
+
+**Batched event model**: Instead of emitting one IPC event per log line, the backend accumulates parsed entries and flushes in batches (up to 64 entries, or after 50 ms of inactivity). This dramatically reduces IPC overhead during high-throughput logging.
 
 #### 4.1.4 Shell Streaming
 
@@ -397,8 +409,7 @@ Stored via `tauri-plugin-store` at `%APPDATA%/DevBridge/config.json`.
     "max_lines": 5000       // Output buffer limit per device (0 = unlimited)
   },
   "logcat": {
-    "max_lines": 5000,
-    "default_filter_level": "D"
+    "max_lines": 5000   // Display buffer limit (0 = unlimited)
   }
 }
 ```
@@ -471,7 +482,45 @@ Stored via `tauri-plugin-store` at `%APPDATA%/DevBridge/config.json`.
 - Backend reads stdout in 8KB chunks instead of line-by-line, naturally batching high-throughput output into fewer IPC events.
 - Frontend uses `requestAnimationFrame`-based render batching — multiple data events within a single frame are coalesced into one React state update (~60fps max).
 
-### 6.3 File Manager Tab Layout
+### 6.3 Logcat Tab Layout
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ [Logcat▾] [All▾] [ Filter (tag or message)  .*  Aa  ab ] [▶Start] [🗑] [⬆]  │
+│                                                           Max [5000▾] 1234 ln│
+├──────────────────────────────────────────────────────────────────────────────┤
+│ 01-15 10:23:45.123 1234 5678 V/Tag: verbose message                          │
+│ 01-15 10:23:45.456 1234 5678 D/Tag: debug message                            │
+│ 01-15 10:23:45.789 1234 5678 I/Tag: info message                             │
+│ 01-15 10:23:45.012 1234 5678 W/Tag: warning message                          │
+│ 01-15 10:23:45.345 1234 5678 E/Tag: error message           ▓ (scrollbar)    │
+│ (streaming output...)                                                         │
+│                                                                               │
+│                                                    [↓ Bottom]  (when paused) │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Toolbar controls (left to right):**
+- **Mode selector**: `Logcat` / `tlogcat` — each mode keeps its own independent log buffer; switching preserves both buffers.
+- **Level dropdown**: `All` / `Verbose` / `Debug` / `Info` / `Warn` / `Error` / `Fatal`. `All` (default) shows every level with no filtering.
+- **Unified filter input**: a single text box with three VS Code-style toggle buttons:
+  - `.*` — Regular expression mode
+  - `Aa` — Case-sensitive match
+  - `ab` — Whole-word match (`\b` boundaries)
+  - Filters match against both tag and message simultaneously.
+- **Start / Stop button**: starts or stops the logcat stream for the selected device.
+- **Clear button**: clears the current mode's log buffer.
+- **Export button**: exports only the currently filtered and visible entries to a `.txt` file.
+- **Max lines input**: always-visible buffer limit (default 5000, 0 = unlimited). Entry count is shown alongside.
+- **Bottom button**: appears when the user has scrolled up to read history; click to resume auto-scroll and flush buffered data.
+
+**Rendering model:**
+- Log lines are rendered as a single HTML string via direct `innerHTML` assignment on an inner content `<div>`, bypassing React's virtual DOM for high throughput.
+- Color is applied via CSS classes (`.log-v`, `.log-d`, `.log-i`, `.log-w`, `.log-e`) rather than per-element inline styles.
+- While the user is scrolled up (auto-scroll paused), DOM updates are suspended entirely — new data accumulates in the in-memory buffer without touching the DOM, allowing uninterrupted scrolling. On resume, the buffer is flushed at once.
+- Level filtering is applied both client-side (for display and export) and server-side (passed to the `start_logcat` backend command).
+
+### 6.4 File Manager Tab Layout
 
 ```
 ┌────────────────────────────────────────────────────────────────┐

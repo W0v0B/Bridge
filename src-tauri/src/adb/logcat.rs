@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
+use std::time::Duration;
 
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -7,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
+use tokio::time::Instant;
 
 use super::commands::adb_path;
 
@@ -31,10 +33,12 @@ pub struct LogcatFilter {
 static LOGCAT_PROCESSES: Lazy<Mutex<HashMap<String, u32>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
-// Threadtime format: MM-DD HH:MM:SS.mmm  PID  TID LEVEL TAG     : message
+// Threadtime format (handles both with and without year prefix):
+//   MM-DD HH:MM:SS.mmm  PID  TID LEVEL TAG     : message
+//   YYYY-MM-DD HH:MM:SS.mmm  PID  TID LEVEL TAG     : message
 static THREADTIME_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
-        r"^(\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d{3})\s+(\d+)\s+(\d+)\s+([VDIWEF])\s+(\S+)\s*:\s*(.*)"
+        r"^(?:\d{4}-)?(\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d{3})\s+(\d+)\s+(\d+)\s+([VDIWEF])\s+(.+?)\s*:\s*(.*)"
     )
     .unwrap()
 });
@@ -154,11 +158,50 @@ pub async fn start(
         if let Some(stdout) = child.stdout.take() {
             let reader = BufReader::new(stdout);
             let mut lines = reader.lines();
+            let mut batch: Vec<LogEntry> = Vec::with_capacity(64);
+            let mut last_flush = Instant::now();
+            let flush_interval = Duration::from_millis(50);
 
-            while let Ok(Some(line)) = lines.next_line().await {
-                if let Some(entry) = parse_logcat_line(&line) {
-                    if passes_filter(&entry, &filter) {
-                        let _ = app.emit("logcat_line", &entry);
+            loop {
+                // Use a timeout so we flush partial batches promptly
+                let maybe_line = tokio::time::timeout(flush_interval, lines.next_line()).await;
+
+                match maybe_line {
+                    Ok(Ok(Some(line))) => {
+                        if let Some(entry) = parse_logcat_line(&line) {
+                            if passes_filter(&entry, &filter) {
+                                batch.push(entry);
+                            }
+                        }
+                        // Flush when batch is large enough or interval elapsed
+                        if batch.len() >= 64 || last_flush.elapsed() >= flush_interval {
+                            if !batch.is_empty() {
+                                let _ = app.emit("logcat_lines", &batch);
+                                batch.clear();
+                            }
+                            last_flush = Instant::now();
+                        }
+                    }
+                    Ok(Ok(None)) => {
+                        // EOF
+                        if !batch.is_empty() {
+                            let _ = app.emit("logcat_lines", &batch);
+                        }
+                        break;
+                    }
+                    Ok(Err(_)) => {
+                        if !batch.is_empty() {
+                            let _ = app.emit("logcat_lines", &batch);
+                        }
+                        break;
+                    }
+                    Err(_) => {
+                        // Timeout — flush whatever we have
+                        if !batch.is_empty() {
+                            let _ = app.emit("logcat_lines", &batch);
+                            batch.clear();
+                            last_flush = Instant::now();
+                        }
                     }
                 }
             }
@@ -181,9 +224,9 @@ pub async fn stop(serial: &str) -> Result<(), String> {
     };
 
     if let Some(pid) = pid {
-        // On Windows, use taskkill
+        // On Windows, use taskkill with /T to kill the process tree
         let _ = tokio::process::Command::new("taskkill")
-            .args(["/F", "/PID", &pid.to_string()])
+            .args(["/F", "/T", "/PID", &pid.to_string()])
             .output()
             .await;
         Ok(())
@@ -226,10 +269,45 @@ pub async fn start_tlogcat(
         if let Some(stdout) = child.stdout.take() {
             let reader = BufReader::new(stdout);
             let mut lines = reader.lines();
+            let mut batch: Vec<LogEntry> = Vec::with_capacity(64);
+            let mut last_flush = Instant::now();
+            let flush_interval = Duration::from_millis(50);
 
-            while let Ok(Some(line)) = lines.next_line().await {
-                if let Some(entry) = parse_tlogcat_line(&line) {
-                    let _ = app.emit("tlogcat_line", &entry);
+            loop {
+                let maybe_line = tokio::time::timeout(flush_interval, lines.next_line()).await;
+
+                match maybe_line {
+                    Ok(Ok(Some(line))) => {
+                        if let Some(entry) = parse_tlogcat_line(&line) {
+                            batch.push(entry);
+                        }
+                        if batch.len() >= 64 || last_flush.elapsed() >= flush_interval {
+                            if !batch.is_empty() {
+                                let _ = app.emit("tlogcat_lines", &batch);
+                                batch.clear();
+                            }
+                            last_flush = Instant::now();
+                        }
+                    }
+                    Ok(Ok(None)) => {
+                        if !batch.is_empty() {
+                            let _ = app.emit("tlogcat_lines", &batch);
+                        }
+                        break;
+                    }
+                    Ok(Err(_)) => {
+                        if !batch.is_empty() {
+                            let _ = app.emit("tlogcat_lines", &batch);
+                        }
+                        break;
+                    }
+                    Err(_) => {
+                        if !batch.is_empty() {
+                            let _ = app.emit("tlogcat_lines", &batch);
+                            batch.clear();
+                            last_flush = Instant::now();
+                        }
+                    }
                 }
             }
         }
@@ -251,7 +329,7 @@ pub async fn stop_tlogcat(serial: &str) -> Result<(), String> {
 
     if let Some(pid) = pid {
         let _ = tokio::process::Command::new("taskkill")
-            .args(["/F", "/PID", &pid.to_string()])
+            .args(["/F", "/T", "/PID", &pid.to_string()])
             .output()
             .await;
         Ok(())

@@ -41,12 +41,12 @@ export function useTransferEvents(
   }, []);
 }
 
-export function useLogcatEvents(onLine: (entry: LogEntry) => void) {
-  const callbackRef = useRef(onLine);
-  callbackRef.current = onLine;
+export function useLogcatEvents(onBatch: (entries: LogEntry[]) => void) {
+  const callbackRef = useRef(onBatch);
+  callbackRef.current = onBatch;
 
   useEffect(() => {
-    const unlisten = listen<LogEntry>("logcat_line", (event) => {
+    const unlisten = listen<LogEntry[]>("logcat_lines", (event) => {
       callbackRef.current(event.payload);
     });
 
@@ -56,12 +56,12 @@ export function useLogcatEvents(onLine: (entry: LogEntry) => void) {
   }, []);
 }
 
-export function useTlogcatEvents(onLine: (entry: LogEntry) => void) {
-  const callbackRef = useRef(onLine);
-  callbackRef.current = onLine;
+export function useTlogcatEvents(onBatch: (entries: LogEntry[]) => void) {
+  const callbackRef = useRef(onBatch);
+  callbackRef.current = onBatch;
 
   useEffect(() => {
-    const unlisten = listen<LogEntry>("tlogcat_line", (event) => {
+    const unlisten = listen<LogEntry[]>("tlogcat_lines", (event) => {
       callbackRef.current(event.payload);
     });
 

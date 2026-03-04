@@ -5,6 +5,7 @@ interface Config {
   theme: "dark" | "light";
   autoConnect: boolean;
   shellMaxLines: number;
+  logcatMaxLines: number;
 }
 
 interface ConfigState {
@@ -18,6 +19,7 @@ export const useConfigStore = create<ConfigState>((set) => ({
     theme: "dark",
     autoConnect: true,
     shellMaxLines: 5000,
+    logcatMaxLines: 5000,
   },
   setConfig: (partial) => set((state) => ({ config: { ...state.config, ...partial } })),
 }));
