@@ -57,6 +57,8 @@ export const useDeviceStore = create<DeviceState>((set) => ({
           state: ad.state,
           model: ad.model,
           product: ad.product,
+          isRoot: ad.is_root,
+          isRemounted: ad.is_remounted,
         };
       });
 

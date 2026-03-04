@@ -6,4 +6,6 @@ export interface ConnectedDevice {
   state: string;
   model?: string;
   product?: string;
+  isRoot?: boolean;
+  isRemounted?: boolean;
 }

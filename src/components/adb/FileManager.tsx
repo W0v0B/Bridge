@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
-import { Table, Button, Space, Breadcrumb, Popconfirm, message, Typography } from "antd";
+import { Table, Button, Space, Popconfirm, message, Typography, Tag, Tooltip, Input } from "antd";
 import {
   FolderOutlined,
   FileOutlined,
@@ -7,7 +7,10 @@ import {
   DownloadOutlined,
   DeleteOutlined,
   ReloadOutlined,
+  EyeOutlined,
+  SearchOutlined,
 } from "@ant-design/icons";
+import { CatModal } from "./CatModal";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { useDeviceStore } from "../../store/deviceStore";
 import { listFiles, pushFiles, pullFile, deleteFile } from "../../utils/adb";
@@ -23,11 +26,17 @@ function humanSize(bytes: number): string {
 export function FileManager() {
   const selectedDeviceId = useDeviceStore((s) => s.selectedDeviceId);
   const allDevices = useDeviceStore((s) => s.devices);
-  const selectedDevice = allDevices.find((d) => d.id === selectedDeviceId)?.serial ?? null;
+  const deviceObj = allDevices.find((d) => d.id === selectedDeviceId) ?? null;
+  const selectedDevice = deviceObj?.serial ?? null;
+  const isRoot = deviceObj?.isRoot ?? false;
+  const isRemounted = deviceObj?.isRemounted ?? false;
+
   const [currentPath, setCurrentPath] = useState("/sdcard");
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedFile, setSelectedFile] = useState<FileEntry | null>(null);
+  const [catOpen, setCatOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
 
   const loadFiles = useCallback(async () => {
     if (!selectedDevice) return;
@@ -49,6 +58,7 @@ export function FileManager() {
 
   const navigateTo = (path: string) => {
     setCurrentPath(path);
+    setSearchQuery("");
   };
 
   const handleRowClick = (record: FileEntry) => {
@@ -98,19 +108,19 @@ export function FileManager() {
     }
   };
 
+  const filteredFiles = searchQuery
+    ? files.filter((f) => f.name.toLowerCase().includes(searchQuery.toLowerCase()))
+    : files;
+
   // Build breadcrumb items from path segments
   const pathSegments = currentPath.split("/").filter(Boolean);
-  const breadcrumbItems = [
-    {
-      title: <a onClick={() => navigateTo("/")}>/</a>,
-      key: "/",
-    },
+  const pathLinks = [
+    <Typography.Link key="/" onClick={() => navigateTo("/")}>/</Typography.Link>,
     ...pathSegments.map((seg, idx) => {
       const path = "/" + pathSegments.slice(0, idx + 1).join("/");
-      return {
-        title: <a onClick={() => navigateTo(path)}>{seg}</a>,
-        key: path,
-      };
+      return (
+        <Typography.Link key={path} onClick={() => navigateTo(path)}>{seg}/</Typography.Link>
+      );
     }),
   ];
 
@@ -161,56 +171,103 @@ export function FileManager() {
   }
 
   return (
-    <div>
-      <Breadcrumb items={breadcrumbItems} style={{ marginBottom: 12 }} />
+    <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", padding: "0 12px 12px" }}>
+      {/* Fixed header: path + toolbar */}
+      <div style={{ flexShrink: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+          {pathLinks}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+          <Space>
+            <Button icon={<UploadOutlined />} onClick={handleUpload}>
+              Upload
+            </Button>
+            <Button
+              icon={<DownloadOutlined />}
+              disabled={!selectedFile || selectedFile.is_dir}
+              onClick={handleDownload}
+            >
+              Download
+            </Button>
+            <Button
+              icon={<EyeOutlined />}
+              disabled={!selectedFile}
+              onClick={() => setCatOpen(true)}
+            >
+              View
+            </Button>
+            <Popconfirm
+              title={`Delete ${selectedFile?.name}?`}
+              onConfirm={handleDelete}
+              disabled={!selectedFile}
+            >
+              <Button
+                icon={<DeleteOutlined />}
+                danger
+                disabled={!selectedFile}
+              >
+                Delete
+              </Button>
+            </Popconfirm>
+            <Button icon={<ReloadOutlined />} onClick={loadFiles}>
+              Refresh
+            </Button>
+            <Input
+              prefix={<SearchOutlined style={{ color: "#bfbfbf" }} />}
+              placeholder="Filter by name…"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              allowClear
+              size="small"
+              style={{ width: 180 }}
+            />
+          </Space>
 
-      <Space style={{ marginBottom: 12 }}>
-        <Button icon={<UploadOutlined />} onClick={handleUpload}>
-          Upload
-        </Button>
-        <Button
-          icon={<DownloadOutlined />}
-          disabled={!selectedFile || selectedFile.is_dir}
-          onClick={handleDownload}
-        >
-          Download
-        </Button>
-        <Popconfirm
-          title={`Delete ${selectedFile?.name}?`}
-          onConfirm={handleDelete}
-          disabled={!selectedFile}
-        >
-          <Button
-            icon={<DeleteOutlined />}
-            danger
-            disabled={!selectedFile}
-          >
-            Delete
-          </Button>
-        </Popconfirm>
-        <Button icon={<ReloadOutlined />} onClick={loadFiles}>
-          Refresh
-        </Button>
-      </Space>
+          <Space size={4}>
+            <Tooltip title={isRoot ? "Device is running as root" : "Not running as root (production build or root not granted)"}>
+              <Tag color={isRoot ? "warning" : "default"} style={{ cursor: "default", userSelect: "none" }}>
+                {isRoot ? "root" : "no root"}
+              </Tag>
+            </Tooltip>
+            <Tooltip title={isRemounted ? "System partition is remounted (writable)" : "System partition is read-only"}>
+              <Tag color={isRemounted ? "processing" : "default"} style={{ cursor: "default", userSelect: "none" }}>
+                {isRemounted ? "remounted" : "not remounted"}
+              </Tag>
+            </Tooltip>
+          </Space>
+        </div>
+      </div>
 
-      <Table
-        dataSource={files}
-        columns={columns}
-        rowKey="path"
-        size="small"
-        loading={loading}
-        pagination={false}
-        onRow={(record) => ({
-          onClick: () => handleRowClick(record),
-          style: {
-            cursor: record.is_dir ? "pointer" : "default",
-            background:
-              selectedFile?.path === record.path
-                ? "#e6f4ff"
-                : undefined,
-          },
-        })}
-      />
+      {/* Scrollable file list */}
+      <div style={{ flex: 1, overflow: "auto" }}>
+        <Table
+          dataSource={filteredFiles}
+          columns={columns}
+          rowKey="path"
+          size="small"
+          loading={loading}
+          pagination={false}
+          onRow={(record) => ({
+            onClick: () => handleRowClick(record),
+            style: {
+              cursor: record.is_dir ? "pointer" : "default",
+              background:
+                selectedFile?.path === record.path
+                  ? "#e6f4ff"
+                  : undefined,
+            },
+          })}
+        />
+      </div>
+
+      {selectedDevice && selectedFile && (
+        <CatModal
+          open={catOpen}
+          onClose={() => setCatOpen(false)}
+          serial={selectedDevice}
+          path={selectedFile.path}
+        />
+      )}
     </div>
   );
 }

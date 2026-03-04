@@ -1,7 +1,7 @@
 # ADB & Serial Debug Tool — Design Document
 
 > **Project Name**: DevBridge (tentative)
-> **Document Version**: v1.4
+> **Document Version**: v1.5
 > **Author**: Personal Project
 > **Tech Stack**: Tauri 2 + Rust + React + TypeScript
 > **Last Updated**: 2026-03
@@ -174,8 +174,21 @@ interface AdbDevice {
   model: string;         // Device model
   product: string;
   transport_id: string;
+  is_root: boolean;      // true if adbd is running as root
+  is_remounted: boolean; // true if system partition was successfully remounted
 }
 ```
+
+**Auto root/remount on connect**: When the device watcher detects a newly online device (`state == "device"`), it spawns `attempt_root_and_remount()` in the background (once per serial per session):
+1. Runs `adb -s {serial} root` and parses output:
+   - `"already running as root"` → `is_root = true`
+   - `"restarting adbd as root"` → polls `whoami` every 1 s for up to 6 s to confirm; `is_root = true` when confirmed
+   - Any other output (e.g. `"cannot run as root in production builds"`) → `is_root = false`
+2. If `is_root`: runs `adb -s {serial} remount`; `is_remounted = output.status.success()`
+3. Stores result in a process-global `DEVICE_ROOT_STATUS: HashMap<String, (bool, bool)>`
+4. Re-emits `devices_changed` with updated status so the frontend reflects the result
+
+Root/remount status is cached for the session (the same serial is not retried if the device briefly disconnects after `adb root` restarts the daemon).
 
 #### 4.1.2 File Manager
 
@@ -195,6 +208,15 @@ async fn pull_file(serial: String, remote_path: String, local_path: String, app:
 #[tauri::command]
 async fn delete_file(serial: String, path: String) -> Result<(), String>
 ```
+
+**View (Cat) feature** — `CatModal` component (`src/components/adb/CatModal.tsx`):
+- Triggered by the **View** button (enabled when a file or node is selected)
+- Reads file content via `runShellCommand` (no new backend command):
+  - Text mode: `head -c {N} "{path}" 2>&1`
+  - Hex mode: `xxd -l {N} "{path}" 2>&1` (requires `xxd` on device; error is shown inline if unavailable)
+- **Size limit**: user-configurable 1–512 KB input, default 8 KB; a truncation warning is shown when output reaches ≥95% of the limit
+- **Auto-refresh**: optional toggle with a configurable interval (1–60 s); updates the view repeatedly for live proc nodes (e.g. `/proc/meminfo`)
+- A `loadingRef` guard prevents overlapping fetches if auto-refresh fires while a previous fetch is still in progress
 
 ```typescript
 interface FileEntry {
@@ -374,6 +396,8 @@ interface ConnectedDevice {
   state: string;
   model?: string;
   product?: string;
+  isRoot?: boolean;     // ADB only — reflects is_root from AdbDevice
+  isRemounted?: boolean;// ADB only — reflects is_remounted from AdbDevice
 }
 ```
 
@@ -528,20 +552,37 @@ Stored via `tauri-plugin-store` at `%APPDATA%/DevBridge/config.json`.
 ### 6.4 File Manager Tab Layout
 
 ```
-┌────────────────────────────────────────────────────────────────┐
-│  Path: / sdcard / Download              [New Folder] [Upload]  │
-├────────────────────────────────────────────────────────────────┤
-│  Name            Size      Modified           Permissions      │
-│  📁 DCIM         -         2024-01-01         rwxr-xr-x        │
-│  📁 Download     -         2024-01-02         rwxr-xr-x        │
-│  📄 test.txt     1.2 KB    2024-01-03         rw-r--r--        │
-│                                                                │
-│   (Right-click menu: Download / Delete / Rename)               │
-├────────────────────────────────────────────────────────────────┤
-│  Transfer Queue:                                               │
-│  test.apk    ████████░░  80%   1.2 MB/s   [Cancel]            │
-│  log.tar.gz  ██░░░░░░░░  20%   800 KB/s   [Cancel]            │
-└────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│  / sdcard/ DCIM/                    ← clickable path segments        │
+│  [Upload] [Download] [View] [Delete] [Refresh] [🔍 Filter by name…]  │
+│                                              [no root] [not remounted]│
+├──────────────────────────────────────────────────────────────────────┤
+│  Name            Size      Modified           Permissions      ▲     │
+│  📁 Camera       -         2024-01-01         rwxr-xr-x              │
+│  📁 Screenshots  -         2024-01-02         rwxr-xr-x        │     │
+│  📄 photo.jpg    3.2 MB    2024-01-03         rw-r--r--        │     │
+│  📄 video.mp4    120 MB    2024-01-04         rw-r--r--        ▼     │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+**Layout behaviour:**
+- The path bar and toolbar are **sticky** — they remain fixed at the top while the file list scrolls independently below them.
+- The path bar renders each segment as a clickable `Typography.Link` (e.g. `/ sdcard/ DCIM/`); clicking any segment navigates directly to that path and clears the filter.
+- The **filter input** (rightmost in toolbar) performs a case-insensitive substring match on file/directory names within the current directory only (no subdirectory recursion). It clears automatically on directory navigation.
+- The **root/remount status tags** (`no root` / `root`, `not remounted` / `remounted`) appear on the right side of the toolbar row, reflecting the auto-detected root/remount state. Color: gray = inactive, gold = root active, blue = remounted. Tooltips explain each state.
+
+**View (Cat) modal — triggered by selecting a file then clicking View:**
+```
+┌─ filename ──────────────────────────────────────────────────────┐
+│  ○ Text  ○ Hex(xxd)   Limit: [ 8 ] KB                          │
+│  Auto-refresh: [off]  Every [ 2 ] s                             │
+├─────────────────────────────────────────────────────────────────┤
+│  Linux version 5.10.157 (build@host) (gcc version 12.x) ...    │
+│                                                                  │
+│                   [monospace scrollable, 420px]                  │
+├─────────────────────────────────────────────────────────────────┤
+│  127 chars · 09:42:01                    [Copy] [Refresh] [Close]│
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -663,6 +704,7 @@ DevBridge/
 │   │   │   └── ConnectModal.tsx # Dialog for serial/network ADB connection
 │   │   ├── adb/
 │   │   │   ├── FileManager.tsx
+│   │   │   ├── CatModal.tsx        # View (cat) modal: text/hex, size limit, auto-refresh
 │   │   │   ├── LogcatPanel.tsx
 │   │   │   └── TransferQueue.tsx
 │   │   └── shell/              # Unified shell for ADB + serial

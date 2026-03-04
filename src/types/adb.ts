@@ -4,6 +4,8 @@ export interface AdbDevice {
   model: string;
   product: string;
   transport_id: string;
+  is_root: boolean;
+  is_remounted: boolean;
 }
 
 export interface FileEntry {
