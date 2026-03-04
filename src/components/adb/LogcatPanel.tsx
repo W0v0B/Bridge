@@ -25,6 +25,7 @@ import {
   stopLogcat,
   startTlogcat,
   stopTlogcat,
+  clearDeviceLog,
   exportLogs,
 } from "../../utils/adb";
 import type { LogEntry, LogcatFilter } from "../../types/adb";
@@ -69,8 +70,15 @@ export function LogcatPanel() {
   const setConfig = useConfigStore((s) => s.setConfig);
 
   const [mode, setMode] = useState<"logcat" | "tlogcat">("logcat");
-  const [running, setRunning] = useState(false);
-  const runningRef = useRef(false);
+  // Per-mode running state — each mode runs independently
+  const [runningMap, setRunningMap] = useState<Record<string, boolean>>({ logcat: false, tlogcat: false });
+  const runningMapRef = useRef<Record<string, boolean>>({ logcat: false, tlogcat: false });
+  const running = runningMap[mode] ?? false;
+
+  const setModeRunning = (m: string, val: boolean) => {
+    runningMapRef.current = { ...runningMapRef.current, [m]: val };
+    setRunningMap({ ...runningMapRef.current });
+  };
   const [level, setLevel] = useState<string>("All");
 
   // Unified filter
@@ -286,11 +294,11 @@ export function LogcatPanel() {
     flushToDOM();
   }, [level, filterText, useRegex, caseSensitive, exactMatch, mode, rebuildHtml, flushToDOM]);
 
-  // Event subscriptions — always accumulate, regardless of which mode is displayed
+  // Event subscriptions — each mode checks its own running flag independently
   useLogcatEvents(
     useCallback(
       (batch: LogEntry[]) => {
-        if (runningRef.current) addEntries("logcat", batch);
+        if (runningMapRef.current["logcat"]) addEntries("logcat", batch);
       },
       [addEntries]
     )
@@ -299,7 +307,7 @@ export function LogcatPanel() {
   useTlogcatEvents(
     useCallback(
       (batch: LogEntry[]) => {
-        if (runningRef.current) addEntries("tlogcat", batch);
+        if (runningMapRef.current["tlogcat"]) addEntries("tlogcat", batch);
       },
       [addEntries]
     )
@@ -310,8 +318,7 @@ export function LogcatPanel() {
       message.warning("Select a device first");
       return;
     }
-    runningRef.current = true;
-    setRunning(true);
+    setModeRunning(mode, true);
     try {
       if (mode === "logcat") {
         const filter: LogcatFilter = {
@@ -324,16 +331,14 @@ export function LogcatPanel() {
         await startTlogcat(selectedDevice);
       }
     } catch (e) {
-      runningRef.current = false;
-      setRunning(false);
+      setModeRunning(mode, false);
       message.error(String(e));
     }
   };
 
   const handleStop = async () => {
     if (!selectedDevice) return;
-    runningRef.current = false;
-    setRunning(false);
+    setModeRunning(mode, false);
     try {
       if (mode === "logcat") {
         await stopLogcat(selectedDevice);
@@ -345,12 +350,28 @@ export function LogcatPanel() {
     }
   };
 
-  const handleClear = () => {
+  /** Clear the in-app display buffer only. */
+  const clearDisplay = () => {
     const buf = getBuffer();
     buf.entries = [];
     buf.html = "";
     if (contentRef.current) contentRef.current.innerHTML = "";
     setEntryCount(0);
+  };
+
+  /**
+   * Clear both the device's on-device logcat ring buffer (adb logcat -c)
+   * and the in-app display buffer. Only applies to logcat mode (not tlogcat).
+   */
+  const handleClear = async () => {
+    clearDisplay();
+    if (selectedDevice && mode === "logcat") {
+      try {
+        await clearDeviceLog(selectedDevice);
+      } catch (e) {
+        message.warning(`Could not clear device log buffer: ${String(e)}`);
+      }
+    }
   };
 
   const handleExport = async () => {
@@ -373,13 +394,9 @@ export function LogcatPanel() {
     }
   };
 
-  const handleModeChange = async (val: string) => {
-    const newMode = val as "logcat" | "tlogcat";
-    if (running) {
-      await handleStop();
-    }
-    // Switch mode — logs are preserved in per-mode buffers
-    setMode(newMode);
+  const handleModeChange = (val: string) => {
+    // Just switch the displayed mode — each mode runs independently in the background
+    setMode(val as "logcat" | "tlogcat");
     // Display will be rebuilt by the filter effect (depends on `mode`)
   };
 
@@ -424,8 +441,22 @@ export function LogcatPanel() {
       <div style={{ marginBottom: 8, flexShrink: 0, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         <Segmented
           options={[
-            { label: "Logcat", value: "logcat" },
-            { label: "tlogcat", value: "tlogcat" },
+            {
+              label: (
+                <span>
+                  Logcat{runningMap["logcat"] && <span style={{ marginLeft: 4, width: 6, height: 6, borderRadius: "50%", background: "#52c41a", display: "inline-block", verticalAlign: "middle" }} />}
+                </span>
+              ),
+              value: "logcat",
+            },
+            {
+              label: (
+                <span>
+                  tlogcat{runningMap["tlogcat"] && <span style={{ marginLeft: 4, width: 6, height: 6, borderRadius: "50%", background: "#52c41a", display: "inline-block", verticalAlign: "middle" }} />}
+                </span>
+              ),
+              value: "tlogcat",
+            },
           ]}
           value={mode}
           onChange={handleModeChange}
@@ -475,7 +506,9 @@ export function LogcatPanel() {
               Start
             </Button>
           )}
-          <Button icon={<ClearOutlined />} onClick={handleClear} />
+          <Tooltip title={mode === "logcat" ? "Clear display and device log buffer (adb logcat -c)" : "Clear display"}>
+            <Button icon={<ClearOutlined />} onClick={handleClear} />
+          </Tooltip>
           <Tooltip title="Export filtered logs">
             <Button icon={<ExportOutlined />} onClick={handleExport} />
           </Tooltip>

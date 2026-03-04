@@ -338,6 +338,22 @@ pub async fn stop_tlogcat(serial: &str) -> Result<(), String> {
     }
 }
 
+/// Clear the on-device logcat ring buffer via `adb logcat -c`.
+pub async fn clear_device_log(serial: &str) -> Result<(), String> {
+    let output = Command::new(adb_path())
+        .args(["-s", serial, "logcat", "-c"])
+        .output()
+        .await
+        .map_err(|e| format!("Failed to run logcat -c: {}", e))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!("logcat -c failed: {}", stderr))
+    }
+}
+
 /// Export log entries to a text file.
 pub async fn export_logs(logs: Vec<LogEntry>, path: String) -> Result<(), String> {
     let content: String = logs

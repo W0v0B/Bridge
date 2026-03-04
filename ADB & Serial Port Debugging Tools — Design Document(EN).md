@@ -1,7 +1,7 @@
 # ADB & Serial Debug Tool — Design Document
 
 > **Project Name**: DevBridge (tentative)
-> **Document Version**: v1.3
+> **Document Version**: v1.4
 > **Author**: Personal Project
 > **Tech Stack**: Tauri 2 + Rust + React + TypeScript
 > **Last Updated**: 2026-03
@@ -235,6 +235,11 @@ async fn start_tlogcat(serial: String, app: AppHandle) -> Result<(), String>
 
 #[tauri::command]
 async fn stop_tlogcat(serial: String) -> Result<(), String>
+
+#[tauri::command]
+async fn clear_device_log(serial: String) -> Result<(), String>
+// Runs `adb -s {serial} logcat -c` to flush the on-device logcat ring buffer
+// Only applies to logcat mode; tlogcat has no equivalent clear command
 
 #[tauri::command]
 async fn export_logs(logs: Vec<LogEntry>, path: String) -> Result<(), String>
@@ -501,15 +506,15 @@ Stored via `tauri-plugin-store` at `%APPDATA%/DevBridge/config.json`.
 ```
 
 **Toolbar controls (left to right):**
-- **Mode selector**: `Logcat` / `tlogcat` — each mode keeps its own independent log buffer; switching preserves both buffers.
+- **Mode selector**: `Logcat` / `tlogcat` — each mode runs **independently**; switching modes never stops the other. A green dot appears on the tab label when that mode is actively collecting. Both modes accumulate into their own buffers simultaneously if both are started.
 - **Level dropdown**: `All` / `Verbose` / `Debug` / `Info` / `Warn` / `Error` / `Fatal`. `All` (default) shows every level with no filtering.
 - **Unified filter input**: a single text box with three VS Code-style toggle buttons:
   - `.*` — Regular expression mode
   - `Aa` — Case-sensitive match
   - `ab` — Whole-word match (`\b` boundaries)
   - Filters match against both tag and message simultaneously.
-- **Start / Stop button**: starts or stops the logcat stream for the selected device.
-- **Clear button**: clears the current mode's log buffer.
+- **Start / Stop button**: starts or stops the stream for the **currently displayed** mode only; the other mode is unaffected.
+- **Clear button**: clears the current mode's in-app display buffer. In logcat mode, also runs `adb logcat -c` to flush the on-device ring buffer so the next Start begins from a clean slate. In tlogcat mode, clears display only.
 - **Export button**: exports only the currently filtered and visible entries to a `.txt` file.
 - **Max lines input**: always-visible buffer limit (default 5000, 0 = unlimited). Entry count is shown alongside.
 - **Bottom button**: appears when the user has scrolled up to read history; click to resume auto-scroll and flush buffered data.

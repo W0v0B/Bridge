@@ -70,6 +70,10 @@ export async function stopTlogcat(serial: string) {
   return invoke("stop_tlogcat", { serial });
 }
 
+export async function clearDeviceLog(serial: string) {
+  return invoke("clear_device_log", { serial });
+}
+
 export async function exportLogs(logs: LogEntry[], path: string) {
   return invoke("export_logs", { logs, path });
 }

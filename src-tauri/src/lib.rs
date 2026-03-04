@@ -35,6 +35,7 @@ pub fn run() {
             stop_logcat,
             start_tlogcat,
             stop_tlogcat,
+            clear_device_log,
             export_logs,
             // Serial commands
             list_serial_ports,
@@ -140,6 +141,11 @@ async fn start_tlogcat(serial: String, app: tauri::AppHandle) -> Result<(), Stri
 #[tauri::command]
 async fn stop_tlogcat(serial: String) -> Result<(), String> {
     logcat::stop_tlogcat(&serial).await
+}
+
+#[tauri::command]
+async fn clear_device_log(serial: String) -> Result<(), String> {
+    logcat::clear_device_log(&serial).await
 }
 
 #[tauri::command]
