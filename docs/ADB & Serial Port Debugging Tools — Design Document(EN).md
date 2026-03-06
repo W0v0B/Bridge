@@ -1,7 +1,7 @@
 # ADB & Serial Debug Tool — Design Document
 
 > **Project Name**: DevBridge (tentative)
-> **Document Version**: v1.5
+> **Document Version**: v1.6
 > **Author**: Personal Project
 > **Tech Stack**: Tauri 2 + Rust + React + TypeScript
 > **Last Updated**: 2026-03
@@ -55,7 +55,8 @@ Build a Windows desktop debugging tool that unifies ADB device management and se
 | File Manager | Visual browsing of the device file system; supports upload, download, and delete | P0 |
 | Batch Transfer | Multi-file / folder drag-and-drop transfer with real-time progress bar | P0 |
 | Log Collection | Real-time logcat output with Tag/Level filtering and export support | P0 |
-| ADB Commands | Built-in shortcuts for common ADB operations (screenshot, reboot, install APK, etc.) | P1 |
+| App Manager | Visual list of installed apps (user + system); install APK, uninstall/disable per app | P1 |
+| ADB Commands | Built-in shortcuts for common ADB operations (screenshot, reboot, etc.) | P1 |
 | Network ADB | Connect to a device over the network by entering an IP:Port | P1 |
 
 #### Serial Module
@@ -132,7 +133,7 @@ tokio Runtime
 │
 ├── Task: adb_device_watcher     # Polls `adb devices` every 2s; emits on change
 ├── Task: logcat_reader          # Streams adb logcat stdout line-by-line; emits each line
-├── Task: shell_stream_reader    # Streams adb shell stdout in chunks; emits shell_output/shell_exit
+├── Task: shell_stream_reader    # Streams adb shell stdout+stderr in parallel; emits shell_output/shell_exit
 ├── Task: file_transfer          # Streams push/pull progress; emits progress updates
 
 std::thread (native)
@@ -297,9 +298,10 @@ static SHELL_PROCESSES: Lazy<Mutex<HashMap<String, u32>>>
 #[tauri::command]
 async fn start_shell_stream(serial: String, command: String, app: AppHandle) -> Result<(), String>
 // 1. If a process already exists for "shell:{serial}", kills it first (auto-stop previous)
-// 2. Spawns `adb -s {serial} shell {command}` with stdout piped, stderr null, kill_on_drop
+// 2. Spawns `adb -s {serial} shell {command}` with stdout+stderr both piped, kill_on_drop
 // 3. Stores PID in SHELL_PROCESSES
-// 4. Spawns tokio task that reads stdout in 8KB chunks and emits("shell_output", ShellOutput)
+// 4. Spawns two parallel tokio tasks — one reads stdout in 8KB chunks, one reads stderr in 4KB
+//    chunks; both emit("shell_output", ShellOutput) so error text appears in the terminal
 // 5. On process exit, emits("shell_exit", ShellExit) and removes PID from map
 
 #[tauri::command]
@@ -322,9 +324,53 @@ interface ShellExit {
 
 > **Design decisions**:
 > - **Chunk-based reading** instead of line-by-line: stdout is read in 8KB chunks via `AsyncReadExt::read()`, which naturally batches high-throughput output (e.g. logcat) into fewer IPC events, dramatically reducing overhead.
+> - **Stderr forwarded to terminal**: A parallel tokio task reads stderr (4KB chunks) and emits the same `shell_output` event. This ensures error messages such as `sh: command: not found` (exit code 127) are visible in the terminal rather than silently discarded.
 > - **Process tree kill**: Uses `taskkill /F /T /PID` on Windows to kill the entire process tree, not just the top-level `adb.exe` client.
 > - **`kill_on_drop(true)`**: Safety net so the child process is automatically killed if the tokio task panics or is aborted.
 > - **One stream per device**: Starting a new stream on the same device auto-stops the previous one. This avoids orphaned processes.
+
+#### 4.1.5 App Manager
+
+```rust
+#[tauri::command]
+async fn list_packages(serial: String) -> Result<Vec<PackageInfo>, String>
+// 1. Runs `pm list packages -f` → all packages with APK paths
+//    Output format: "package:/data/app/com.example-1/base.apk=com.example"
+// 2. Runs `pm list packages -3` → third-party (non-system) package names
+// 3. Cross-references the two lists: is_system = package NOT in third-party set
+// 4. Returns sorted: user apps first, then system apps, both alphabetically
+
+#[tauri::command]
+async fn uninstall_package(serial: String, package: String, is_system: bool, is_root: bool) -> Result<String, String>
+// Selects the appropriate uninstall method:
+// - User app (!is_system):        `adb -s {serial} uninstall {package}`
+// - System app + root:            `pm uninstall {package}`            (full permanent removal)
+// - System app + no root:         `pm uninstall -k --user 0 {package}` (soft disable for current user)
+// Returns combined stdout+stderr; errors on non-zero exit
+
+#[tauri::command]
+async fn install_apk(serial: String, apk_path: String) -> Result<(), String>
+// Runs `adb -s {serial} install -r {apk_path}`
+```
+
+```typescript
+interface PackageInfo {
+  package_name: string;  // e.g. "com.android.settings"
+  apk_path: string;      // e.g. "/system/app/Settings/Settings.apk"
+  is_system: boolean;    // false = user-installed (third-party)
+}
+```
+
+**Frontend** (`src/components/adb/AppManager.tsx`):
+- Sticky toolbar: Install APK button, search input, All / User / System filter, Refresh + item count via pagination
+- Paginated table (default 50/page, options 20/50/100/200) — limits DOM nodes rendered, eliminating stutter when switching filters or typing
+- `filteredPackages` is wrapped in `useMemo([packages, filter, searchQuery])` for efficient recomputation
+- Columns: Package Name (monospace), Type tag (orange = system, blue = user), APK Path (ellipsis + tooltip), Action button
+- **Uninstall/Disable button**: label and Popconfirm wording adapt to app type and root status:
+  - User app → "Uninstall" / "Uninstall {pkg}?"
+  - System + root → "Uninstall" / "Fully remove system app {pkg}? (root — permanent)"
+  - System + no root → "Disable" / "Disable {pkg} for current user? (no root — soft disable)"
+- **Loading feedback**: `message.loading(…, 0)` toast appears for both install and uninstall operations; transitions to success/error on completion. The Install APK button also shows an inline spinner while running.
 
 ### 4.2 Serial Module
 
@@ -453,7 +499,7 @@ Stored via `tauri-plugin-store` at `%APPDATA%/DevBridge/config.json`.
 ┌─────────────────────────────────────────────────────────────────┐
 │  Toolbar: Logo | Device Info | Connect Button | Settings        │
 ├──────────────────┬──────────────────────────────────────────────┤
-│                  │  Tabs: [Shell] [Logcat] [File Manager]       │
+│                  │  Tabs: [Shell] [Logcat] [File Manager] [Apps] │
 │  Left Sidebar    │ ──────────────────────────────────────────── │
 │                  │                                              │
 │  Unified Device  │              Main Work Area                  │
@@ -585,6 +631,28 @@ Stored via `tauri-plugin-store` at `%APPDATA%/DevBridge/config.json`.
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+### 6.5 Apps Tab Layout
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│  [Install APK]  [🔍 Search packages…]  ● All  ○ User  ○ System  [↻] │
+├──────────────────────────────────────────────────────────────────────┤
+│  Package Name                   Type     APK Path              Action│
+│  com.android.settings           system   /system/app/Set…   [Disable]│
+│  com.google.android.gms         system   /data/app/com.g…   [Disable]│
+│  com.example.myapp              user     /data/app/com.e… [Uninstall]│
+│  com.example.anotherapp         user     /data/app/com.e… [Uninstall]│
+│                                                                       │
+│  < 1 2 3 … >   50/page ▾   1234 packages             (pagination bar)│
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+**Behaviour:**
+- Filter tabs (All / User / System) and search box filter the package list in real time. `filteredPackages` is memoized; `currentPage` resets to 1 on any filter/search change.
+- Pagination is controlled (default 50/page); options: 20, 50, 100, 200. Total count is shown in the pagination bar.
+- Uninstall/Disable button label and confirmation wording depend on app type and root status (see §4.1.5).
+- Install APK: opens a file picker filtered to `.apk`; button shows inline spinner and a toast notification during transfer; list reloads on success.
+
 ---
 
 ## 7. Technology Stack
@@ -657,10 +725,11 @@ Bundle `adb.exe`, `AdbWinApi.dll`, and `AdbWinUsbApi.dll` inside the app's `reso
 
 ### Phase 4 — Polish & Packaging (Week 7–8)
 
+- [x] App Manager tab: list packages (user + system), install APK, uninstall/disable
+- [x] Shell stderr forwarded to terminal output (command-not-found errors now visible)
 - [ ] Config persistence (tauri-plugin-store)
 - [ ] Bundle adb.exe into installer
 - [ ] Network ADB connection
-- [ ] APK install feature
 - [ ] Error handling and auto-reconnect
 - [ ] Build installer (NSIS / MSI)
 
@@ -679,7 +748,8 @@ DevBridge/
 │   │   │   ├── device.rs       # Device scanning, hot-plug watcher
 │   │   │   ├── file.rs         # File manager commands (push/pull/delete)
 │   │   │   ├── logcat.rs       # Streaming logcat reader
-│   │   │   └── commands.rs     # Shell commands, reboot, install APK
+│   │   │   ├── apps.rs         # App manager: list packages, install/uninstall
+│   │   │   └── commands.rs     # Shell stream, reboot, install APK
 │   │   ├── serial/
 │   │   │   ├── mod.rs
 │   │   │   └── manager.rs      # Port open/close/write, read loop thread, event emission
@@ -706,6 +776,7 @@ DevBridge/
 │   │   │   ├── FileManager.tsx
 │   │   │   ├── CatModal.tsx        # View (cat) modal: text/hex, size limit, auto-refresh
 │   │   │   ├── LogcatPanel.tsx
+│   │   │   ├── AppManager.tsx      # App Manager tab: package list, install, uninstall/disable
 │   │   │   └── TransferQueue.tsx
 │   │   └── shell/              # Unified shell for ADB + serial
 │   │       ├── ShellPanel.tsx          # Terminal output + input, serial data subscription
