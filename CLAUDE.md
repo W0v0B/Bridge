@@ -49,7 +49,7 @@ All Tauri commands are registered in `src-tauri/src/lib.rs` via `tauri::generate
 ### Backend (`src-tauri/src/`)
 
 - **`lib.rs`** — entry point; registers all Tauri plugins and commands
-- **`adb/`** — `device.rs` (device listing), `file.rs` (push/pull), `logcat.rs` (start/stop), `commands.rs` (shell, reboot, install APK)
+- **`adb/`** — `device.rs` (device listing), `file.rs` (push/pull), `logcat.rs` (start/stop), `commands.rs` (shell stream, reboot), `apps.rs` (package list, install/uninstall)
 - **`serial/`** — `manager.rs` (port open/close/write using a `Lazy<Mutex<HashMap>>` to track open ports), `state.rs`
 - **`config.rs`** — persistent configuration
 
@@ -68,4 +68,4 @@ The ADB implementation calls the `adb` CLI binary. The binary is expected to be 
 - **ADB via subprocess**: The Rust backend shells out to `adb` CLI via `tauri-plugin-shell`; it does not use a native Rust ADB library.
 - **Serial port state**: Open serial ports are held in a process-global `Lazy<Mutex<HashMap<String, Box<dyn SerialPort>>>>` in `serial/manager.rs`.
 - **Non-blocking UI**: Long-running operations (file transfer, logcat streaming) must use async Rust and Tauri events to push results to the frontend without blocking.
-- **Design spec**: Full feature and UI design is in `ADB & Serial Port Debugging Tools — Design Document(EN).md` — consult it for intended behavior before implementing features.
+- **Design spec**: Full feature and UI design is in `docs/ADB & Serial Port Debugging Tools — Design Document(EN).md` — consult it for intended behavior before implementing features.
