@@ -5,6 +5,7 @@ import { Toolbar } from "./components/layout/Toolbar";
 import { StatusBar } from "./components/layout/StatusBar";
 import { ConnectModal } from "./components/layout/ConnectModal";
 import { FileManager } from "./components/adb/FileManager";
+import { AppManager } from "./components/adb/AppManager";
 import { LogcatPanel } from "./components/adb/LogcatPanel";
 import { TransferQueue } from "./components/adb/TransferQueue";
 import { ShellPanel } from "./components/shell/ShellPanel";
@@ -22,6 +23,7 @@ function App() {
     { key: "shell", label: "Shell", children: <ShellPanel /> },
     { key: "logcat", label: "Logcat", children: <LogcatPanel /> },
     { key: "files", label: "File Manager", children: <FileManager /> },
+    { key: "apps", label: "Apps", children: <AppManager /> },
   ];
 
   return (

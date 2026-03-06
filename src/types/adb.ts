@@ -40,3 +40,9 @@ export interface LogcatFilter {
   tags: string[] | null;
   keyword: string | null;
 }
+
+export interface PackageInfo {
+  package_name: string;
+  apk_path: string;
+  is_system: boolean;
+}

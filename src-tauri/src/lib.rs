@@ -2,7 +2,7 @@ mod adb;
 mod serial;
 mod config;
 
-use adb::{commands, device, file, logcat};
+use adb::{apps, commands, device, file, logcat};
 use serial::manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -30,6 +30,10 @@ pub fn run() {
             run_shell_command,
             start_shell_stream,
             stop_shell_stream,
+            install_apk,
+            // ADB app commands
+            list_packages,
+            uninstall_package,
             // ADB logcat commands
             start_logcat,
             stop_logcat,
@@ -115,6 +119,28 @@ async fn start_shell_stream(
 #[tauri::command]
 async fn stop_shell_stream(serial: String) -> Result<(), String> {
     commands::stop_shell_stream(&serial).await
+}
+
+#[tauri::command]
+async fn install_apk(serial: String, apk_path: String) -> Result<(), String> {
+    commands::install_apk(&serial, &apk_path).await
+}
+
+// ── ADB App Commands ──
+
+#[tauri::command]
+async fn list_packages(serial: String) -> Result<Vec<apps::PackageInfo>, String> {
+    apps::list_packages(&serial).await
+}
+
+#[tauri::command]
+async fn uninstall_package(
+    serial: String,
+    package: String,
+    is_system: bool,
+    is_root: bool,
+) -> Result<String, String> {
+    apps::uninstall_package(&serial, &package, is_system, is_root).await
 }
 
 // ── ADB Logcat Commands ──

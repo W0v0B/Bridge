@@ -137,7 +137,7 @@ pub async fn start_shell_stream(
     let mut child = Command::new(adb_path())
         .args(["-s", serial, "shell", command])
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
         .kill_on_drop(true)
         .spawn()
         .map_err(|e| format!("Failed to start shell stream: {}", e))?;
@@ -150,6 +150,31 @@ pub async fn start_shell_stream(
     }
 
     let serial_owned = serial.to_string();
+
+    // Spawn a task to forward stderr to the terminal output
+    let stderr_handle = child.stderr.take();
+    let serial_stderr = serial_owned.clone();
+    let app_stderr = app.clone();
+    tokio::spawn(async move {
+        if let Some(mut stderr) = stderr_handle {
+            let mut buf = vec![0u8; 4096];
+            loop {
+                match stderr.read(&mut buf).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        let data = String::from_utf8_lossy(&buf[..n]).to_string();
+                        let _ = app_stderr.emit(
+                            "shell_output",
+                            ShellOutput {
+                                serial: serial_stderr.clone(),
+                                data,
+                            },
+                        );
+                    }
+                }
+            }
+        }
+    });
 
     tokio::spawn(async move {
         if let Some(mut stdout) = child.stdout.take() {

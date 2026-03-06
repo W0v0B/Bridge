@@ -4,6 +4,7 @@ import type {
   FileEntry,
   LogEntry,
   LogcatFilter,
+  PackageInfo,
 } from "../types/adb";
 
 export async function getDevices() {
@@ -76,4 +77,26 @@ export async function clearDeviceLog(serial: string) {
 
 export async function exportLogs(logs: LogEntry[], path: string) {
   return invoke("export_logs", { logs, path });
+}
+
+export async function listPackages(serial: string) {
+  return invoke<PackageInfo[]>("list_packages", { serial });
+}
+
+export async function uninstallPackage(
+  serial: string,
+  pkg: string,
+  isSystem: boolean,
+  isRoot: boolean
+) {
+  return invoke<string>("uninstall_package", {
+    serial,
+    package: pkg,
+    isSystem,
+    isRoot,
+  });
+}
+
+export async function installApk(serial: string, apkPath: string) {
+  return invoke("install_apk", { serial, apkPath });
 }
