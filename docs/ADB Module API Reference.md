@@ -48,7 +48,9 @@ interface AdbDevice {
   product: string;       // e.g. "raven" (empty string if not reported)
   transport_id: string;  // Internal ADB transport ID
   is_root: boolean;      // true if adbd is running as root on this device
+  root_info: string;     // Human-readable output from the root attempt; empty = still in progress
   is_remounted: boolean; // true if the system partition was successfully remounted rw
+  remount_info: string;  // Human-readable output from the remount attempt; empty = still in progress
 }
 ```
 
@@ -60,12 +62,15 @@ pub struct AdbDevice {
     pub product: String,
     pub transport_id: String,
     pub is_root: bool,
+    pub root_info: String,
     pub is_remounted: bool,
+    pub remount_info: String,
 }
 ```
 
 **Notes:**
-- `is_root` and `is_remounted` are determined once per session when the device first comes online (see [Device Watcher](#device-watcher)). They are cached in `DEVICE_ROOT_STATUS` and merged into every subsequent `list_devices()` call.
+- `is_root`, `root_info`, `is_remounted`, and `remount_info` are determined once per session when the device first comes online (see [Device Watcher](#device-watcher)). They are cached in `DEVICE_ROOT_STATUS` and merged into every subsequent `list_devices()` call.
+- While the root/remount attempt is still running, `root_info` and `remount_info` are empty strings. The File Manager UI displays `"checking..."` in this state.
 - `state == "device"` means the device is fully connected and authorized.
 
 ---
@@ -177,11 +182,25 @@ Returned by `list_packages`. Represents one installed package.
 
 ```typescript
 interface PackageInfo {
-  package_name: string; // e.g. "com.android.settings"
-  apk_path: string;     // Full path to the base APK, e.g. "/system/app/Settings/Settings.apk"
-  is_system: boolean;   // true if the package is NOT in "pm list packages -3" (third-party list)
+  package_name: string;                             // e.g. "com.android.settings"
+  apk_path: string;                                 // Full path to the base APK, e.g. "/system/app/Settings/Settings.apk"
+  is_system: boolean;                               // true if the package is NOT in "pm list packages -3" (third-party list)
+  is_disabled: boolean;                             // true if the package appears in "pm list packages -d" (explicitly disabled)
+  is_hidden: boolean;                               // true if present in "pm list packages -u" but NOT in the regular installed set
+  app_type: "user" | "system" | "vendor" | "product"; // Partition classification derived from apk_path
 }
 ```
+
+**App type classification** (from `apk_path` prefix):
+
+| `apk_path` prefix | `app_type` |
+|-------------------|------------|
+| `/data/app/` | `"user"` |
+| `/product/` | `"product"` |
+| `/vendor/` | `"vendor"` |
+| `/system/`, `/system_ext/`, `/apex/`, or unrecognised | `"system"` |
+
+**Hidden packages**: A package is `is_hidden = true` when it has been soft-removed via `pm uninstall -k --user 0`. The APK remains on its partition but the package is not installed for the current user — it disappears from the launcher and from all standard `pm list packages` output. It can be restored via `re_enable_package` (`pm install-existing --user 0`). Hidden packages appear only in `pm list packages -u` (includes uninstalled).
 
 ---
 
@@ -255,12 +274,13 @@ invoke("disconnect_device", { serial: string }): Promise<string>
 2. When the device list changes, emits [`devices_changed`](#devices_changed).
 3. For each newly seen device with `state == "device"`, spawns `attempt_root_and_remount()` **once per serial per session** (tracked in a session-local `HashSet`).
 4. `attempt_root_and_remount()`:
-   - Runs `adb -s {serial} root` and inspects output:
-     - `"already running as root"` → `is_root = true`
-     - `"restarting adbd as root"` → polls `adb -s {serial} shell whoami` every 1 s for up to 6 s; `is_root = true` when `"root"` is confirmed
-     - Other output (e.g. `"cannot run as root in production builds"`) → `is_root = false`
-   - If `is_root == true`, runs `adb -s {serial} remount`; `is_remounted = exit_status.success()`
-   - Stores `(is_root, is_remounted)` in `DEVICE_ROOT_STATUS: Lazy<Mutex<HashMap<String, (bool, bool)>>>`
+   - Runs `adb -s {serial} root` and inspects stdout:
+     - `"already running as root"` → `is_root = true`, `root_info = "Already running as root"`
+     - `"restarting adbd as root"` → polls `adb -s {serial} shell whoami` every 1 s for up to 6 s; `is_root = true`, `root_info = "Restarted adbd as root"` when `"root"` is confirmed; `root_info = "adbd restart timed out"` on timeout
+     - Other output (e.g. `"cannot run as root in production builds"`) → `is_root = false`, `root_info = <trimmed stdout+stderr>`
+   - If `is_root == true`, runs `adb -s {serial} remount`; `is_remounted = exit_status.success()`, `remount_info = <trimmed stdout+stderr>`
+   - If `is_root == false`, `remount_info = "Remount requires root access"`
+   - Stores `(is_root, root_info, is_remounted, remount_info)` in `DEVICE_ROOT_STATUS: Lazy<Mutex<HashMap<String, (bool, String, bool, String)>>>`
    - Re-emits `devices_changed` with the updated status
 
 ---
@@ -575,16 +595,21 @@ invoke("list_packages", { serial: string }): Promise<PackageInfo[]>
 |-----------|------|-------------|
 | `serial` | `string` | Device serial |
 
-**Returns**: Array of `PackageInfo`, sorted: user apps first (alphabetically), then system apps (alphabetically).
+**Returns**: Array of `PackageInfo`, sorted: user → product → vendor → system, then by `is_hidden` (visible first), then alphabetically within each group.
 
-**Implementation**:
-1. Runs `adb -s {serial} shell pm list packages -f` — all packages with APK paths.
-   - Each line format: `package:/data/app/com.example-1/base.apk=com.example`
-   - Parsed by splitting on the **last** `=` character (APK paths may contain `=`).
-2. Runs `adb -s {serial} shell pm list packages -3` — third-party (non-system) package names only.
-3. Cross-references: `is_system = package_name NOT IN third_party_set`.
+**Implementation** (4 parallel `pm` calls via `tokio::try_join!`):
+1. `pm list packages -u -f` — primary list: all packages including hidden (installed=false for user 0), with APK paths.
+2. `pm list packages -f` — installed-set: packages currently installed for user 0, with APK paths.
+3. `pm list packages -3` — third-party set: user-installed package names only.
+4. `pm list packages -d` — disabled set: explicitly disabled package names.
 
-**Errors**: Rejects if either `pm` command fails to execute.
+Cross-references:
+- `is_hidden = package_name NOT IN installed_set` (present in `-u` but not in regular `-f`)
+- `is_system = package_name NOT IN third_party_set`
+- `is_disabled = package_name IN disabled_set`
+- `app_type` = classified from `apk_path` prefix (see [`PackageInfo`](#packageinfo))
+
+**Errors**: Rejects if any `pm` command fails to execute.
 
 ---
 
@@ -640,6 +665,73 @@ invoke("install_apk", { serial: string, apkPath: string }): Promise<void>
 **Implementation**: Runs `adb -s {serial} install -r {apkPath}`. The `-r` flag allows reinstall/upgrade of an existing app.
 
 **Errors**: Rejects if `adb install` exits with a non-zero code.
+
+---
+
+### `force_stop_package`
+
+Force-stops a running app process.
+
+```typescript
+invoke("force_stop_package", { serial: string, package: string }): Promise<void>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `serial` | `string` | Device serial |
+| `package` | `string` | Package name, e.g. `"com.example.app"` |
+
+**Implementation**: Runs `adb -s {serial} shell am force-stop {package}`.
+
+**Notes**: Equivalent to killing an app from the Recent Apps screen. The app can be relaunched normally afterwards. Safe for any app type.
+
+**Errors**: Rejects if the command exits with a non-zero code.
+
+---
+
+### `clear_package_data`
+
+Clears all data (preferences, databases, cache) for a package.
+
+```typescript
+invoke("clear_package_data", { serial: string, package: string }): Promise<string>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `serial` | `string` | Device serial |
+| `package` | `string` | Package name |
+
+**Returns**: Output from `pm clear`, e.g. `"Success"`.
+
+**Implementation**: Runs `adb -s {serial} shell pm clear {package}`. Checks that the output contains `"success"` (case-insensitive).
+
+**Notes**: Resets the app to a factory-fresh state. Data cannot be recovered. Safe for any app type.
+
+**Errors**: Rejects if the command fails or if output does not contain `"success"`.
+
+---
+
+### `re_enable_package`
+
+Re-enables a package that was previously hidden via `pm uninstall -k --user 0`.
+
+```typescript
+invoke("re_enable_package", { serial: string, package: string }): Promise<string>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `serial` | `string` | Device serial |
+| `package` | `string` | Package name of a hidden package |
+
+**Returns**: Output from `pm install-existing`.
+
+**Implementation**: Runs `adb -s {serial} shell pm install-existing --user 0 {package}`. Checks that the output contains `"installed for user"`.
+
+**Notes**: Only applicable to packages with `is_hidden = true`. After re-enabling, the package returns to normal installed state and reappears in the launcher.
+
+**Errors**: Rejects if the command fails or output does not contain `"installed for user"`.
 
 ---
 
@@ -759,6 +851,9 @@ import {
   listPackages,
   uninstallPackage,
   installApk,
+  forceStopPackage,
+  clearPackageData,
+  reEnablePackage,
 } from "../utils/adb";
 ```
 
@@ -783,6 +878,9 @@ import {
 | `listPackages(serial)` | `list_packages` |
 | `uninstallPackage(serial, pkg, isSystem, isRoot)` | `uninstall_package` |
 | `installApk(serial, apkPath)` | `install_apk` |
+| `forceStopPackage(serial, pkg)` | `force_stop_package` |
+| `clearPackageData(serial, pkg)` | `clear_package_data` |
+| `reEnablePackage(serial, pkg)` | `re_enable_package` |
 
 ---
 

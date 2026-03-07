@@ -16,13 +16,15 @@ import {
   DeleteOutlined,
   ReloadOutlined,
   SearchOutlined,
+  PoweroffOutlined,
+  ClearOutlined,
 } from "@ant-design/icons";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useDeviceStore } from "../../store/deviceStore";
-import { listPackages, uninstallPackage, installApk } from "../../utils/adb";
+import { listPackages, uninstallPackage, installApk, forceStopPackage, clearPackageData, reEnablePackage } from "../../utils/adb";
 import type { PackageInfo } from "../../types/adb";
 
-type FilterMode = "all" | "user" | "system";
+type FilterMode = "all" | "user" | "system" | "product" | "vendor" | "hidden";
 
 export function AppManager() {
   const selectedDeviceId = useDeviceStore((s) => s.selectedDeviceId);
@@ -37,6 +39,10 @@ export function AppManager() {
   const [filter, setFilter] = useState<FilterMode>("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [uninstallingPkg, setUninstallingPkg] = useState<string | null>(null);
+  const [disablingPkg, setDisablingPkg] = useState<string | null>(null);
+  const [stoppingPkg, setStoppingPkg] = useState<string | null>(null);
+  const [clearingPkg, setClearingPkg] = useState<string | null>(null);
+  const [reEnablingPkg, setReEnablingPkg] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
 
@@ -85,21 +91,36 @@ export function AppManager() {
     }
   };
 
+  const handleDisable = async (pkg: PackageInfo) => {
+    if (!selectedDevice) return;
+    setDisablingPkg(pkg.package_name);
+    const hide = message.loading(`Disabling ${pkg.package_name}…`, 0);
+    try {
+      // Always soft-disable: pm uninstall -k --user 0
+      await uninstallPackage(selectedDevice, pkg.package_name, true, false);
+      hide();
+      message.success(`Disabled ${pkg.package_name} for current user`);
+      loadPackages();
+    } catch (e) {
+      hide();
+      message.error(String(e));
+    } finally {
+      setDisablingPkg(null);
+    }
+  };
+
   const handleUninstall = async (pkg: PackageInfo) => {
     if (!selectedDevice) return;
     setUninstallingPkg(pkg.package_name);
-    const action = pkg.is_system
-      ? isRoot ? "Removing system app" : "Disabling app"
-      : "Uninstalling";
-    const hide = message.loading(`${action} ${pkg.package_name}…`, 0);
+    // User app: adb uninstall; system+root: pm uninstall (root)
+    const isSystem = pkg.is_system;
+    const hide = message.loading(`Uninstalling ${pkg.package_name}…`, 0);
     try {
-      await uninstallPackage(selectedDevice, pkg.package_name, pkg.is_system, isRoot);
+      await uninstallPackage(selectedDevice, pkg.package_name, isSystem, isRoot);
       hide();
       message.success(
-        pkg.is_system
-          ? isRoot
-            ? `Removed system app ${pkg.package_name}`
-            : `Disabled ${pkg.package_name} for current user`
+        isSystem
+          ? `Removed system app ${pkg.package_name}`
           : `Uninstalled ${pkg.package_name}`
       );
       loadPackages();
@@ -111,11 +132,54 @@ export function AppManager() {
     }
   };
 
+  const handleForceStop = async (pkg: PackageInfo) => {
+    if (!selectedDevice) return;
+    setStoppingPkg(pkg.package_name);
+    try {
+      await forceStopPackage(selectedDevice, pkg.package_name);
+      message.success(`Force stopped ${pkg.package_name}`);
+    } catch (e) {
+      message.error(String(e));
+    } finally {
+      setStoppingPkg(null);
+    }
+  };
+
+  const handleClearData = async (pkg: PackageInfo) => {
+    if (!selectedDevice) return;
+    setClearingPkg(pkg.package_name);
+    try {
+      await clearPackageData(selectedDevice, pkg.package_name);
+      message.success(`Cleared data for ${pkg.package_name}`);
+    } catch (e) {
+      message.error(String(e));
+    } finally {
+      setClearingPkg(null);
+    }
+  };
+
+  const handleReEnable = async (pkg: PackageInfo) => {
+    if (!selectedDevice) return;
+    setReEnablingPkg(pkg.package_name);
+    try {
+      await reEnablePackage(selectedDevice, pkg.package_name);
+      message.success(`Re-enabled ${pkg.package_name}`);
+      loadPackages();
+    } catch (e) {
+      message.error(String(e));
+    } finally {
+      setReEnablingPkg(null);
+    }
+  };
+
   const filteredPackages = useMemo(
     () =>
       packages.filter((pkg) => {
-        if (filter === "user" && pkg.is_system) return false;
-        if (filter === "system" && !pkg.is_system) return false;
+        if (filter === "hidden") {
+          if (!pkg.is_hidden) return false;
+        } else if (filter !== "all") {
+          if (pkg.app_type !== filter) return false;
+        }
         if (searchQuery && !pkg.package_name.toLowerCase().includes(searchQuery.toLowerCase()))
           return false;
         return true;
@@ -123,10 +187,9 @@ export function AppManager() {
     [packages, filter, searchQuery]
   );
 
-  const getConfirmTitle = (pkg: PackageInfo) => {
+  const getUninstallTitle = (pkg: PackageInfo) => {
     if (!pkg.is_system) return `Uninstall ${pkg.package_name}?`;
-    if (isRoot) return `Fully remove system app ${pkg.package_name}? (root — permanent)`;
-    return `Disable ${pkg.package_name} for current user? (no root — soft disable, not permanent)`;
+    return `Remove system app ${pkg.package_name}? (root — database-level, reverts on factory reset)`;
   };
 
   const columns = [
@@ -142,15 +205,24 @@ export function AppManager() {
     },
     {
       title: "Type",
-      dataIndex: "is_system",
-      key: "is_system",
-      width: 80,
-      render: (isSystem: boolean) =>
-        isSystem ? (
-          <Tag color="orange">system</Tag>
-        ) : (
-          <Tag color="blue">user</Tag>
-        ),
+      key: "type",
+      width: 130,
+      render: (_: unknown, record: PackageInfo) => {
+        const tagProps: Record<string, { color: string }> = {
+          user:    { color: "blue" },
+          product: { color: "green" },
+          vendor:  { color: "purple" },
+          system:  { color: "orange" },
+        };
+        const { color } = tagProps[record.app_type] ?? { color: "default" };
+        return (
+          <Space size={4}>
+            <Tag color={color}>{record.app_type}</Tag>
+            {record.is_hidden && <Tag color="red">hidden</Tag>}
+            {record.is_disabled && <Tag color="default">disabled</Tag>}
+          </Space>
+        );
+      },
     },
     {
       title: "APK Path",
@@ -169,26 +241,94 @@ export function AppManager() {
       ),
     },
     {
-      title: "Action",
+      title: "Actions",
       key: "action",
-      width: 110,
-      render: (_: unknown, record: PackageInfo) => (
-        <Popconfirm
-          title={getConfirmTitle(record)}
-          onConfirm={() => handleUninstall(record)}
-          okText="Confirm"
-          okButtonProps={{ danger: true }}
-        >
-          <Button
-            size="small"
-            danger
-            icon={<DeleteOutlined />}
-            loading={uninstallingPkg === record.package_name}
-          >
-            {record.is_system && !isRoot ? "Disable" : "Uninstall"}
-          </Button>
-        </Popconfirm>
-      ),
+      width: 220,
+      render: (_: unknown, record: PackageInfo) => {
+        if (record.is_hidden) {
+          return (
+            <Popconfirm
+              title={`Re-enable ${record.package_name}?`}
+              description="This will restore the app for the current user."
+              onConfirm={() => handleReEnable(record)}
+              okText="Re-enable"
+            >
+              <Button size="small" loading={reEnablingPkg === record.package_name}>
+                Re-enable
+              </Button>
+            </Popconfirm>
+          );
+        }
+        const canUninstall = !record.is_system || isRoot;
+        return (
+          <Space size={4}>
+            <Tooltip title="Force Stop">
+              <Button
+                size="small"
+                icon={<PoweroffOutlined />}
+                loading={stoppingPkg === record.package_name}
+                onClick={() => handleForceStop(record)}
+              />
+            </Tooltip>
+            <Popconfirm
+              title={`Clear all data for ${record.package_name}?`}
+              description="This will wipe all app data and cannot be undone."
+              onConfirm={() => handleClearData(record)}
+              okText="Clear"
+              okButtonProps={{ danger: true }}
+            >
+              <Tooltip title="Clear Data">
+                <Button
+                  size="small"
+                  icon={<ClearOutlined />}
+                  loading={clearingPkg === record.package_name}
+                />
+              </Tooltip>
+            </Popconfirm>
+            <Tooltip title={record.is_system ? undefined : "Only available for system apps"}>
+              {record.is_system ? (
+                <Popconfirm
+                  title={`Disable ${record.package_name} for current user?`}
+                  description="The app will be hidden but can be re-enabled later."
+                  onConfirm={() => handleDisable(record)}
+                  okText="Disable"
+                >
+                  <Button size="small" loading={disablingPkg === record.package_name}>
+                    Disable
+                  </Button>
+                </Popconfirm>
+              ) : (
+                <Button size="small" disabled>
+                  Disable
+                </Button>
+              )}
+            </Tooltip>
+            <Tooltip title={canUninstall ? undefined : "Requires root to uninstall system apps"}>
+              {canUninstall ? (
+                <Popconfirm
+                  title={getUninstallTitle(record)}
+                  onConfirm={() => handleUninstall(record)}
+                  okText="Uninstall"
+                  okButtonProps={{ danger: true }}
+                >
+                  <Button
+                    size="small"
+                    danger
+                    icon={<DeleteOutlined />}
+                    loading={uninstallingPkg === record.package_name}
+                  >
+                    Uninstall
+                  </Button>
+                </Popconfirm>
+              ) : (
+                <Button size="small" danger icon={<DeleteOutlined />} disabled>
+                  Uninstall
+                </Button>
+              )}
+            </Tooltip>
+          </Space>
+        );
+      },
     },
   ];
 
@@ -241,7 +381,10 @@ export function AppManager() {
             options={[
               { label: "All", value: "all" },
               { label: "User", value: "user" },
+              { label: "Product", value: "product" },
+              { label: "Vendor", value: "vendor" },
               { label: "System", value: "system" },
+              { label: "Hidden", value: "hidden" },
             ]}
           />
           <Tooltip title="Refresh">

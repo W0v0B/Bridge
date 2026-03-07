@@ -17,11 +17,15 @@ pub struct AdbDevice {
     pub product: String,
     pub transport_id: String,
     pub is_root: bool,
+    /// Output from the `adb root` attempt; empty = attempt still in progress.
+    pub root_info: String,
     pub is_remounted: bool,
+    /// Output from the `adb remount` attempt; empty = attempt still in progress.
+    pub remount_info: String,
 }
 
-/// Tracks root/remount status per device serial, persisted for the session.
-static DEVICE_ROOT_STATUS: Lazy<Mutex<HashMap<String, (bool, bool)>>> =
+/// Tracks (is_root, root_info, is_remounted, remount_info) per serial for the session.
+static DEVICE_ROOT_STATUS: Lazy<Mutex<HashMap<String, (bool, String, bool, String)>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
 /// Parse the output of `adb devices -l` into a list of AdbDevice.
@@ -60,7 +64,9 @@ fn parse_devices_output(output: &str) -> Vec<AdbDevice> {
             product,
             transport_id,
             is_root: false,
+            root_info: String::new(),
             is_remounted: false,
+            remount_info: String::new(),
         });
     }
     devices
@@ -74,9 +80,13 @@ pub async fn list_devices() -> Result<Vec<AdbDevice>, String> {
 
     if let Ok(root_status) = DEVICE_ROOT_STATUS.lock() {
         for device in &mut devices {
-            if let Some(&(is_root, is_remounted)) = root_status.get(&device.serial) {
-                device.is_root = is_root;
-                device.is_remounted = is_remounted;
+            if let Some((is_root, root_info, is_remounted, remount_info)) =
+                root_status.get(&device.serial)
+            {
+                device.is_root = *is_root;
+                device.root_info = root_info.clone();
+                device.is_remounted = *is_remounted;
+                device.remount_info = remount_info.clone();
             }
         }
     }
@@ -98,60 +108,88 @@ pub async fn disconnect_device(serial: &str) -> Result<String, String> {
 }
 
 /// Attempt `adb root` then `adb remount` for a device.
-/// Updates DEVICE_ROOT_STATUS and re-emits devices_changed.
+/// Captures output text for both steps so the UI can show failure reasons.
 async fn attempt_root_and_remount(serial: String, app: AppHandle) {
-    let mut is_root = false;
-    let mut is_remounted = false;
-
-    // Try adb root — use Command directly so non-zero exit doesn't become an error
-    if let Ok(output) = Command::new(adb_path())
+    // ── Step 1: adb root ──
+    let (is_root, root_info) = match Command::new(adb_path())
         .args(["-s", &serial, "root"])
         .output()
         .await
     {
-        let text = format!(
-            "{}{}",
-            String::from_utf8_lossy(&output.stdout).to_lowercase(),
-            String::from_utf8_lossy(&output.stderr).to_lowercase()
-        );
-
-        if text.contains("already running as root") {
-            is_root = true;
-        } else if text.contains("restarting adbd as root") {
-            // Daemon is restarting — poll whoami until confirmed or timeout
-            for _ in 0..6 {
-                tokio::time::sleep(Duration::from_secs(1)).await;
-                if let Ok(out) = Command::new(adb_path())
-                    .args(["-s", &serial, "shell", "whoami"])
-                    .output()
-                    .await
-                {
-                    if String::from_utf8_lossy(&out.stdout).trim() == "root" {
-                        is_root = true;
-                        break;
+        Err(e) => (false, format!("Failed to run adb root: {}", e)),
+        Ok(output) => {
+            let text = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let lower = text.to_lowercase();
+            if lower.contains("already running as root") {
+                (true, "Already running as root".to_string())
+            } else if lower.contains("restarting adbd as root") {
+                // Poll whoami until root is confirmed or timeout
+                let mut rooted = false;
+                for _ in 0..6 {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    if let Ok(out) = Command::new(adb_path())
+                        .args(["-s", &serial, "shell", "whoami"])
+                        .output()
+                        .await
+                    {
+                        if String::from_utf8_lossy(&out.stdout).trim() == "root" {
+                            rooted = true;
+                            break;
+                        }
                     }
                 }
+                if rooted {
+                    (true, "Restarted adbd as root".to_string())
+                } else {
+                    (false, "adbd restart timed out".to_string())
+                }
+            } else {
+                (false, text.trim().to_string())
             }
         }
-        // else: "cannot run as root in production builds" or other error → is_root stays false
-    }
+    };
 
-    if is_root {
-        if let Ok(output) = Command::new(adb_path())
+    // ── Step 2: adb remount (only if root succeeded) ──
+    let (is_remounted, remount_info) = if is_root {
+        match Command::new(adb_path())
             .args(["-s", &serial, "remount"])
             .output()
             .await
         {
-            is_remounted = output.status.success();
+            Err(e) => (false, format!("Failed to run adb remount: {}", e)),
+            Ok(output) => {
+                let text = format!(
+                    "{}{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                )
+                .trim()
+                .to_string();
+                let success = output.status.success();
+                let info = if text.is_empty() {
+                    if success {
+                        "Remount successful".to_string()
+                    } else {
+                        "Remount failed (no output)".to_string()
+                    }
+                } else {
+                    text
+                };
+                (success, info)
+            }
         }
-    }
+    } else {
+        (false, "Remount requires root access".to_string())
+    };
 
-    // Cache the result for this serial
     if let Ok(mut map) = DEVICE_ROOT_STATUS.lock() {
-        map.insert(serial.clone(), (is_root, is_remounted));
+        map.insert(serial.clone(), (is_root, root_info, is_remounted, remount_info));
     }
 
-    // Re-emit the device list with updated root status
     if let Ok(devices) = list_devices().await {
         let _ = app.emit("devices_changed", &devices);
     }

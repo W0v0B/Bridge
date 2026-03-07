@@ -5,7 +5,9 @@ export interface AdbDevice {
   product: string;
   transport_id: string;
   is_root: boolean;
+  root_info: string;
   is_remounted: boolean;
+  remount_info: string;
 }
 
 export interface FileEntry {
@@ -45,4 +47,7 @@ export interface PackageInfo {
   package_name: string;
   apk_path: string;
   is_system: boolean;
+  is_disabled: boolean;
+  is_hidden: boolean;
+  app_type: "user" | "system" | "vendor" | "product";
 }

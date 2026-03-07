@@ -16,18 +16,21 @@ import {
   DeleteOutlined,
   UploadOutlined,
   SearchOutlined,
+  PoweroffOutlined,
+  ClearOutlined,
 } from "@ant-design/icons";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useDeviceStore } from "../../store/deviceStore";
-import { listBundles, installHap, uninstallBundle } from "../../utils/hdc";
+import { listBundles, installHap, uninstallBundle, forceStopBundle, clearBundleData } from "../../utils/hdc";
 import type { BundleInfo } from "../../types/hdc";
 
-type FilterMode = "all" | "user" | "system" | "vendor";
+type FilterMode = "all" | "user" | "system" | "vendor" | "product";
 
-const TYPE_TAG: Record<string, { color: string; label: string }> = {
-  user:   { color: "blue",   label: "user" },
-  system: { color: "orange", label: "system" },
-  vendor: { color: "purple", label: "vendor" },
+const TYPE_TAG: Record<string, { color: string }> = {
+  user:    { color: "blue" },
+  product: { color: "green" },
+  vendor:  { color: "purple" },
+  system:  { color: "orange" },
 };
 
 export function HdcAppManager() {
@@ -41,6 +44,8 @@ export function HdcAppManager() {
   const [searchQuery, setSearchQuery] = useState("");
   const [filter, setFilter] = useState<FilterMode>("all");
   const [uninstallingPkg, setUninstallingPkg] = useState<string | null>(null);
+  const [stoppingPkg, setStoppingPkg] = useState<string | null>(null);
+  const [clearingPkg, setClearingPkg] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
 
@@ -81,6 +86,32 @@ export function HdcAppManager() {
     }
   };
 
+  const handleForceStop = async (bundleName: string) => {
+    if (!connectKey) return;
+    setStoppingPkg(bundleName);
+    try {
+      await forceStopBundle(connectKey, bundleName);
+      message.success(`Force stopped ${bundleName}`);
+    } catch (e) {
+      message.error(String(e));
+    } finally {
+      setStoppingPkg(null);
+    }
+  };
+
+  const handleClearData = async (bundleName: string) => {
+    if (!connectKey) return;
+    setClearingPkg(bundleName);
+    try {
+      await clearBundleData(connectKey, bundleName);
+      message.success(`Cleared data for ${bundleName}`);
+    } catch (e) {
+      message.error(String(e));
+    } finally {
+      setClearingPkg(null);
+    }
+  };
+
   const handleUninstall = async (bundleName: string) => {
     if (!connectKey) return;
     setUninstallingPkg(bundleName);
@@ -99,8 +130,7 @@ export function HdcAppManager() {
     () =>
       bundles.filter((b) => {
         if (filter !== "all" && b.app_type !== filter) return false;
-        if (searchQuery && !b.bundle_name.toLowerCase().includes(searchQuery.toLowerCase()))
-          return false;
+        if (searchQuery && !b.bundle_name.toLowerCase().includes(searchQuery.toLowerCase())) return false;
         return true;
       }),
     [bundles, filter, searchQuery]
@@ -165,8 +195,9 @@ export function HdcAppManager() {
             options={[
               { label: "All", value: "all" },
               { label: "User", value: "user" },
-              { label: "System", value: "system" },
+              { label: "Product", value: "product" },
               { label: "Vendor", value: "vendor" },
+              { label: "System", value: "system" },
             ]}
           />
           <Tooltip title="Refresh">
@@ -210,8 +241,8 @@ export function HdcAppManager() {
               key: "app_type",
               width: 80,
               render: (t: string) => {
-                const meta = TYPE_TAG[t] ?? { color: "default", label: t };
-                return <Tag color={meta.color}>{meta.label}</Tag>;
+                const { color } = TYPE_TAG[t] ?? { color: "default" };
+                return <Tag color={color}>{t}</Tag>;
               },
             },
             {
@@ -234,26 +265,62 @@ export function HdcAppManager() {
                 ),
             },
             {
-              title: "Action",
+              title: "Actions",
               key: "action",
-              width: 110,
-              render: (_: unknown, record: BundleInfo) => (
-                <Popconfirm
-                  title={`Uninstall ${record.bundle_name}?`}
-                  onConfirm={() => handleUninstall(record.bundle_name)}
-                  okText="Confirm"
-                  okButtonProps={{ danger: true }}
-                >
-                  <Button
-                    size="small"
-                    danger
-                    icon={<DeleteOutlined />}
-                    loading={uninstallingPkg === record.bundle_name}
-                  >
-                    Uninstall
-                  </Button>
-                </Popconfirm>
-              ),
+              width: 180,
+              render: (_: unknown, record: BundleInfo) => {
+                const isSystem = record.app_type !== "user";
+                return (
+                  <Space size={4}>
+                    <Tooltip title="Force Stop">
+                      <Button
+                        size="small"
+                        icon={<PoweroffOutlined />}
+                        loading={stoppingPkg === record.bundle_name}
+                        onClick={() => handleForceStop(record.bundle_name)}
+                      />
+                    </Tooltip>
+                    <Popconfirm
+                      title={`Clear all data for ${record.bundle_name}?`}
+                      description="This will wipe all app data and cannot be undone."
+                      onConfirm={() => handleClearData(record.bundle_name)}
+                      okText="Clear"
+                      okButtonProps={{ danger: true }}
+                    >
+                      <Tooltip title="Clear Data">
+                        <Button
+                          size="small"
+                          icon={<ClearOutlined />}
+                          loading={clearingPkg === record.bundle_name}
+                        />
+                      </Tooltip>
+                    </Popconfirm>
+                    <Tooltip title={isSystem ? "Cannot uninstall system bundles" : undefined}>
+                      {isSystem ? (
+                        <Button size="small" danger icon={<DeleteOutlined />} disabled>
+                          Uninstall
+                        </Button>
+                      ) : (
+                        <Popconfirm
+                          title={`Uninstall ${record.bundle_name}?`}
+                          onConfirm={() => handleUninstall(record.bundle_name)}
+                          okText="Uninstall"
+                          okButtonProps={{ danger: true }}
+                        >
+                          <Button
+                            size="small"
+                            danger
+                            icon={<DeleteOutlined />}
+                            loading={uninstallingPkg === record.bundle_name}
+                          >
+                            Uninstall
+                          </Button>
+                        </Popconfirm>
+                      )}
+                    </Tooltip>
+                  </Space>
+                );
+              },
             },
           ]}
         />

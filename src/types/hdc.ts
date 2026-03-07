@@ -24,5 +24,5 @@ export interface HilogFilter {
 export interface BundleInfo {
   bundle_name: string;
   code_path: string;
-  app_type: "user" | "system" | "vendor";
+  app_type: "user" | "system" | "vendor" | "product";
 }

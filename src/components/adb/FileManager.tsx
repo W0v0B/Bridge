@@ -29,7 +29,9 @@ export function FileManager() {
   const deviceObj = allDevices.find((d) => d.id === selectedDeviceId) ?? null;
   const selectedDevice = deviceObj?.serial ?? null;
   const isRoot = deviceObj?.isRoot ?? false;
+  const rootInfo = deviceObj?.rootInfo ?? "";
   const isRemounted = deviceObj?.isRemounted ?? false;
+  const remountInfo = deviceObj?.remountInfo ?? "";
 
   const [currentPath, setCurrentPath] = useState("/sdcard");
   const [files, setFiles] = useState<FileEntry[]>([]);
@@ -223,16 +225,55 @@ export function FileManager() {
           </Space>
 
           <Space size={4}>
-            <Tooltip title={isRoot ? "Device is running as root" : "Not running as root (production build or root not granted)"}>
-              <Tag color={isRoot ? "warning" : "default"} style={{ cursor: "default", userSelect: "none" }}>
-                {isRoot ? "root" : "no root"}
-              </Tag>
-            </Tooltip>
-            <Tooltip title={isRemounted ? "System partition is remounted (writable)" : "System partition is read-only"}>
-              <Tag color={isRemounted ? "processing" : "default"} style={{ cursor: "default", userSelect: "none" }}>
-                {isRemounted ? "remounted" : "not remounted"}
-              </Tag>
-            </Tooltip>
+            {/* Root tag */}
+            {(() => {
+              const checking = !isRoot && rootInfo === "";
+              const label = checking ? "checking..." : isRoot ? "root" : "no root";
+              const color = isRoot ? "warning" : "default";
+              const tip = isRoot
+                ? "Running as root"
+                : checking
+                ? "Checking root status…"
+                : rootInfo || "Not running as root";
+              return (
+                <Tooltip title={tip}>
+                  <Tag color={color} style={{ cursor: "default", userSelect: "none" }}>
+                    {label}
+                  </Tag>
+                </Tooltip>
+              );
+            })()}
+            {/* Remount tag */}
+            {(() => {
+              const checking = isRoot && !isRemounted && remountInfo === "";
+              const unavailable = !isRoot && rootInfo !== "";
+              const label = isRemounted
+                ? "remounted"
+                : checking
+                ? "checking..."
+                : unavailable
+                ? "read-only"
+                : "remount failed";
+              const color = isRemounted
+                ? "processing"
+                : !isRemounted && remountInfo !== "" && !unavailable
+                ? "error"
+                : "default";
+              const tip = isRemounted
+                ? "System partition is remounted (writable)"
+                : checking
+                ? "Remount in progress…"
+                : unavailable
+                ? "Remount requires root access"
+                : `Remount failed: ${remountInfo}`;
+              return (
+                <Tooltip title={tip}>
+                  <Tag color={color} style={{ cursor: "default", userSelect: "none" }}>
+                    {label}
+                  </Tag>
+                </Tooltip>
+              );
+            })()}
           </Space>
         </div>
       </div>

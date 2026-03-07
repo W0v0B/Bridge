@@ -37,6 +37,9 @@ pub fn run() {
             // ADB app commands
             list_packages,
             uninstall_package,
+            force_stop_package,
+            clear_package_data,
+            re_enable_package,
             // ADB logcat commands
             start_logcat,
             stop_logcat,
@@ -65,6 +68,8 @@ pub fn run() {
             list_bundles,
             install_hap,
             uninstall_bundle,
+            force_stop_bundle,
+            clear_bundle_data,
             // Serial commands
             list_serial_ports,
             open_serial_port,
@@ -168,6 +173,21 @@ async fn uninstall_package(
     is_root: bool,
 ) -> Result<String, String> {
     apps::uninstall_package(&serial, &package, is_system, is_root).await
+}
+
+#[tauri::command]
+async fn force_stop_package(serial: String, package: String) -> Result<(), String> {
+    apps::force_stop_package(&serial, &package).await
+}
+
+#[tauri::command]
+async fn clear_package_data(serial: String, package: String) -> Result<String, String> {
+    apps::clear_package_data(&serial, &package).await
+}
+
+#[tauri::command]
+async fn re_enable_package(serial: String, package: String) -> Result<String, String> {
+    apps::re_enable_package(&serial, &package).await
 }
 
 // ── ADB Logcat Commands ──
@@ -315,6 +335,16 @@ async fn install_hap(connect_key: String, hap_path: String) -> Result<String, St
 #[tauri::command]
 async fn uninstall_bundle(connect_key: String, bundle_name: String) -> Result<String, String> {
     hdc_apps::uninstall_bundle(&connect_key, &bundle_name).await
+}
+
+#[tauri::command]
+async fn force_stop_bundle(connect_key: String, bundle_name: String) -> Result<(), String> {
+    hdc_apps::force_stop_bundle(&connect_key, &bundle_name).await
+}
+
+#[tauri::command]
+async fn clear_bundle_data(connect_key: String, bundle_name: String) -> Result<(), String> {
+    hdc_apps::clear_bundle_data(&connect_key, &bundle_name).await
 }
 
 // ── File Utilities ──

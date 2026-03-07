@@ -100,3 +100,15 @@ export async function uninstallPackage(
 export async function installApk(serial: string, apkPath: string) {
   return invoke("install_apk", { serial, apkPath });
 }
+
+export async function forceStopPackage(serial: string, pkg: string) {
+  return invoke("force_stop_package", { serial, package: pkg });
+}
+
+export async function clearPackageData(serial: string, pkg: string) {
+  return invoke<string>("clear_package_data", { serial, package: pkg });
+}
+
+export async function reEnablePackage(serial: string, pkg: string) {
+  return invoke<string>("re_enable_package", { serial, package: pkg });
+}

@@ -130,10 +130,10 @@ Returned by `list_bundles`. Represents one installed HAP bundle.
 
 ```typescript
 interface BundleInfo {
-  bundle_name: string;                    // e.g. "com.huawei.hmos.browser"
-  code_path: string;                      // Actual HAP file path, e.g. "/system/app/Browser/HuaweiBrowser.hap"
-                                          // Empty string if path could not be resolved
-  app_type: "user" | "system" | "vendor"; // Derived from isSystemApp + hapPath prefix
+  bundle_name: string;                             // e.g. "com.huawei.hmos.browser"
+  code_path: string;                               // Actual HAP file path, e.g. "/system/app/Browser/HuaweiBrowser.hap"
+                                                   // Empty string if path could not be resolved
+  app_type: "user" | "system" | "vendor" | "product"; // Derived from isSystemApp + hapPath prefix
 }
 ```
 
@@ -142,12 +142,14 @@ interface BundleInfo {
 | `isSystemApp` | `hapPath` prefix | `app_type` |
 |---------------|-----------------|------------|
 | `false` | any | `"user"` |
-| `true` | `/vendor/`, `/chipset/`, `/sys_prod/`, `/cust/`, `/preload/` | `"vendor"` |
-| `true` | `/system/` or unrecognised | `"system"` |
+| `true` | `/sys_prod/`, `/cust/` | `"product"` |
+| `true` | `/vendor/`, `/chipset/` | `"vendor"` |
+| `true` | `/system/`, `/data/` (pre-installed), or unrecognised | `"system"` |
 
 **Notes:**
 - `code_path` is populated from the first non-empty `"hapPath"` field in `bm dump -n` JSON output, **not** from `"codePath"` (which always points to the runtime data directory under `/data/app/`, regardless of app type).
-- Classification uses `"isSystemApp"` from the JSON output as the primary signal; `hapPath` prefix is used only to distinguish `"vendor"` from `"system"` within system apps.
+- Classification uses `"isSystemApp"` from the JSON output as the primary signal; `hapPath` prefix is used to further distinguish `"product"` and `"vendor"` from `"system"` within system apps.
+- `/sys_prod/` is the OEM product customisation partition (equivalent to Android's `/product/`), distinct from the hardware vendor partition (`/vendor/`, `/chipset/`).
 
 ---
 
@@ -557,9 +559,51 @@ invoke("uninstall_bundle", { connectKey: string, bundleName: string }): Promise<
 
 **Implementation**: Runs `hdc -t {connectKey} uninstall {bundleName}`.
 
-**Notes**: This command works reliably for user-installed apps. System and vendor apps will generally fail with an error on production firmware (no root-based fallback is available, unlike the ADB module's `pm uninstall -k --user 0` soft-disable path). The error message from the device is surfaced to the user via `message.error(...)`.
+**Notes**: This command works reliably for user-installed apps (`app_type == "user"`). System, product, and vendor bundles will fail on production firmware (`error: uninstall system app error`, code 9568380). There is no `bm disable` CLI available in the current OHOS version, so no soft-disable fallback exists for system apps. The Uninstall button is grayed out in the UI for non-user bundles.
 
 **Errors**: Rejects if `hdc uninstall` exits with a non-zero code AND the output does not contain `"success"`.
+
+---
+
+### `force_stop_bundle`
+
+Force-stops a running bundle process.
+
+```typescript
+invoke("force_stop_bundle", { connectKey: string, bundleName: string }): Promise<void>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `connectKey` | `string` | Device connect_key |
+| `bundleName` | `string` | Bundle name, e.g. `"com.huawei.hmos.browser"` |
+
+**Implementation**: Runs `hdc -t {connectKey} shell aa force-stop {bundleName}`. Checks that the output contains `"successfully"`.
+
+**Notes**: Equivalent to the Android `am force-stop` command. Safe for any bundle type (user, system, product, vendor). The bundle can be relaunched normally afterwards.
+
+**Errors**: Rejects if the command fails or output does not contain `"successfully"`.
+
+---
+
+### `clear_bundle_data`
+
+Clears all data (preferences, databases, files) for a bundle.
+
+```typescript
+invoke("clear_bundle_data", { connectKey: string, bundleName: string }): Promise<void>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `connectKey` | `string` | Device connect_key |
+| `bundleName` | `string` | Bundle name |
+
+**Implementation**: Runs `hdc -t {connectKey} shell bm clean -n {bundleName} -d`. Checks that the output contains `"successfully"`.
+
+**Notes**: Resets the bundle to a factory-fresh state. Data cannot be recovered. Safe for any bundle type.
+
+**Errors**: Rejects if the command fails or output does not contain `"successfully"`.
 
 ---
 
@@ -660,6 +704,8 @@ import {
   listBundles,
   installHap,
   uninstallBundle,
+  forceStopBundle,
+  clearBundleData,
 } from "../utils/hdc";
 ```
 
@@ -681,6 +727,8 @@ import {
 | `listBundles(connectKey)` | `list_bundles` |
 | `installHap(connectKey, hapPath)` | `install_hap` |
 | `uninstallBundle(connectKey, bundleName)` | `uninstall_bundle` |
+| `forceStopBundle(connectKey, bundleName)` | `force_stop_bundle` |
+| `clearBundleData(connectKey, bundleName)` | `clear_bundle_data` |
 
 ---
 

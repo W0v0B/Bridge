@@ -42,7 +42,7 @@ pub async fn list_bundles(connect_key: &str) -> Result<Vec<BundleInfo>, String> 
         }
     }
 
-    // Sort: user → vendor → system, alphabetically within each group
+    // Sort: user → product → vendor → system, alphabetically within each group
     bundles.sort_by(|a, b| {
         type_order(&a.app_type)
             .cmp(&type_order(&b.app_type))
@@ -55,8 +55,9 @@ pub async fn list_bundles(connect_key: &str) -> Result<Vec<BundleInfo>, String> 
 fn type_order(t: &str) -> u8 {
     match t {
         "user" => 0,
-        "vendor" => 1,
-        _ => 2,
+        "product" => 1,
+        "vendor" => 2,
+        _ => 3,
     }
 }
 
@@ -104,15 +105,12 @@ fn parse_bundle_detail(text: &str) -> (String, String) {
 
     let app_type = if !is_system {
         "user".to_string()
-    } else if hap_path.starts_with("/vendor/")
-        || hap_path.starts_with("/chipset/")
-        || hap_path.starts_with("/sys_prod/")
-        || hap_path.starts_with("/cust/")
-        || hap_path.starts_with("/preload/")
-    {
-        "vendor".to_string()
+    } else if hap_path.starts_with("/sys_prod/") || hap_path.starts_with("/cust/") {
+        "product".to_string() // device-specific customisations (≈ Android /product/)
+    } else if hap_path.starts_with("/vendor/") || hap_path.starts_with("/chipset/") {
+        "vendor".to_string() // hardware vendor (≈ Android /vendor/)
     } else {
-        "system".to_string()
+        "system".to_string() // /system/, /preload/, and anything unrecognised
     };
 
     (hap_path, app_type)
@@ -123,6 +121,38 @@ fn extract_json_string(line: &str) -> Option<String> {
     let after_colon = line.splitn(2, ':').nth(1)?.trim();
     let inner = after_colon.trim_matches(',').trim().trim_matches('"');
     Some(inner.to_string())
+}
+
+/// Force-stop a running bundle via `aa force-stop <bundle_name>`.
+pub async fn force_stop_bundle(connect_key: &str, bundle_name: &str) -> Result<(), String> {
+    let output = Command::new(hdc_path())
+        .args(["-t", connect_key, "shell", "aa", "force-stop", bundle_name])
+        .output()
+        .await
+        .map_err(|e| format!("Failed to run aa force-stop: {}", e))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if output.status.success() || stdout.contains("successfully") {
+        Ok(())
+    } else {
+        Err(stdout)
+    }
+}
+
+/// Clear bundle data via `bm clean -n <bundle_name> -d`.
+pub async fn clear_bundle_data(connect_key: &str, bundle_name: &str) -> Result<(), String> {
+    let output = Command::new(hdc_path())
+        .args(["-t", connect_key, "shell", "bm", "clean", "-n", bundle_name, "-d"])
+        .output()
+        .await
+        .map_err(|e| format!("Failed to run bm clean: {}", e))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if output.status.success() || stdout.contains("successfully") {
+        Ok(())
+    } else {
+        Err(stdout)
+    }
 }
 
 /// Install a HAP package on an OHOS device via `hdc install <path>`.

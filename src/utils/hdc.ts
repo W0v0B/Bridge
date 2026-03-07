@@ -73,3 +73,11 @@ export async function installHap(connectKey: string, hapPath: string) {
 export async function uninstallBundle(connectKey: string, bundleName: string) {
   return invoke<string>("uninstall_bundle", { connectKey, bundleName });
 }
+
+export async function forceStopBundle(connectKey: string, bundleName: string) {
+  return invoke("force_stop_bundle", { connectKey, bundleName });
+}
+
+export async function clearBundleData(connectKey: string, bundleName: string) {
+  return invoke("clear_bundle_data", { connectKey, bundleName });
+}
