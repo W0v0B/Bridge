@@ -1,6 +1,11 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Input, Button, InputNumber, Tooltip, Typography } from "antd";
-import { StopOutlined, ClearOutlined, SettingOutlined } from "@ant-design/icons";
+import { Input, Button, InputNumber, Tooltip, Typography, message } from "antd";
+import {
+  StopOutlined, ClearOutlined, SettingOutlined,
+  DownloadOutlined, FileAddOutlined,
+} from "@ant-design/icons";
+import { save } from "@tauri-apps/plugin-dialog";
+import { writeTextFile } from "@tauri-apps/plugin-fs";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { useDeviceStore } from "../../store/deviceStore";
 import { useConfigStore } from "../../store/configStore";
@@ -26,6 +31,9 @@ export function ShellPanel() {
   const [input, setInput] = useState("");
   const [running, setRunning] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [logToFile, setLogToFile] = useState(false);
+  const logFilePathRef = useRef<string | null>(null);
+
   const outputRef = useRef<HTMLDivElement>(null);
   const rafId = useRef<number>(0);
   const pendingFlush = useRef(false);
@@ -47,13 +55,15 @@ export function ShellPanel() {
     return idx > 0 ? text.slice(idx + 1) : text;
   }, []);
 
-  // Sync per-device state when switching devices
+  // Sync per-device state when switching devices; stop log-to-file
   useEffect(() => {
     if (selectedDeviceId) {
       setOutput(outputMap.current[selectedDeviceId] ?? "");
       setInput(inputMap.current[selectedDeviceId] ?? "");
       setRunning(runningMap.current[selectedDeviceId] ?? false);
     }
+    logFilePathRef.current = null;
+    setLogToFile(false);
   }, [selectedDeviceId]);
 
   useEffect(() => {
@@ -84,6 +94,9 @@ export function ShellPanel() {
       (outputMap.current[selectedDeviceId] ?? "") + text
     );
     scheduleFlush();
+    if (logFilePathRef.current) {
+      writeTextFile(logFilePathRef.current, text, { append: true }).catch(() => {});
+    }
   }, [selectedDeviceId, scheduleFlush, trimToMaxLines]);
 
   const setDeviceRunning = useCallback((deviceId: string, value: boolean) => {
@@ -194,6 +207,43 @@ export function ShellPanel() {
     setOutput("");
   };
 
+  const makeLogFilename = () => {
+    const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    const dev = (selectedDevice?.serial ?? "shell").replace(/[^a-zA-Z0-9]/g, "_");
+    return `shell_${dev}_${ts}.txt`;
+  };
+
+  const handleExportSnapshot = async () => {
+    if (!selectedDeviceId) return;
+    const content = outputMap.current[selectedDeviceId] ?? "";
+    const path = await save({ defaultPath: makeLogFilename(), filters: [{ name: "Text", extensions: ["txt"] }] });
+    if (!path) return;
+    try {
+      await writeTextFile(path, content);
+      message.success("Log exported");
+    } catch (e) {
+      message.error(String(e));
+    }
+  };
+
+  const handleToggleLogToFile = async () => {
+    if (logToFile) {
+      logFilePathRef.current = null;
+      setLogToFile(false);
+      return;
+    }
+    const path = await save({ defaultPath: makeLogFilename(), filters: [{ name: "Text", extensions: ["txt"] }] });
+    if (!path) return;
+    try {
+      await writeTextFile(path, ""); // create/truncate the file
+      logFilePathRef.current = path;
+      setLogToFile(true);
+      message.success("Logging to file started");
+    } catch (e) {
+      message.error(String(e));
+    }
+  };
+
   if (!selectedDevice) {
     return (
       <div
@@ -267,6 +317,22 @@ export function ShellPanel() {
                 <Text style={{ color: "#666", fontSize: 10 }}>0=unlimited</Text>
               </div>
             )}
+            <Tooltip title="Export snapshot">
+              <Button
+                size="small"
+                type="text"
+                icon={<DownloadOutlined style={{ color: "#999" }} />}
+                onClick={handleExportSnapshot}
+              />
+            </Tooltip>
+            <Tooltip title={logToFile ? "Stop logging to file" : "Log to file"}>
+              <Button
+                size="small"
+                type="text"
+                icon={<FileAddOutlined style={{ color: logToFile ? "#ff4d4f" : "#999" }} />}
+                onClick={handleToggleLogToFile}
+              />
+            </Tooltip>
             <Tooltip title="Settings">
               <Button
                 size="small"
