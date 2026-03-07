@@ -8,6 +8,10 @@ export async function openPort(portName: string, baudRate: number) {
   return invoke("open_serial_port", { portName, baudRate });
 }
 
+export async function openTelnetSession(host: string, port: number) {
+  return invoke("open_telnet_session", { host, port });
+}
+
 export async function closePort(portName: string) {
   return invoke("close_serial_port", { portName });
 }

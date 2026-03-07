@@ -73,6 +73,7 @@ pub fn run() {
             // Serial commands
             list_serial_ports,
             open_serial_port,
+            open_telnet_session,
             close_serial_port,
             write_serial,
             // File utilities
@@ -375,6 +376,13 @@ async fn list_serial_ports() -> Result<Vec<String>, String> {
 #[tauri::command]
 async fn open_serial_port(port_name: String, baud_rate: u32, app: tauri::AppHandle) -> Result<(), String> {
     manager::open_port(&port_name, baud_rate, app)
+}
+
+#[tauri::command]
+async fn open_telnet_session(host: String, port: u16, app: tauri::AppHandle) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || manager::open_telnet(&host, port, app))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

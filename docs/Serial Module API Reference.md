@@ -37,39 +37,40 @@ Serial commands are **not** async on the Rust side (they operate on a global `Mu
 
 ### `SerialDataEvent`
 
-Emitted whenever bytes are received from an open serial port.
+Emitted whenever bytes are received from an open serial port **or** a Telnet session. Both connection types share the same event.
 
 ```rust
 #[derive(Clone, Serialize)]
 pub struct SerialDataEvent {
-    pub port: String,  // Port name, e.g. "COM3"
+    pub port: String,  // Port name (e.g. "COM3") or Telnet session ID (e.g. "192.168.1.1:23")
     pub data: String,  // Received bytes decoded as UTF-8 (lossy — invalid sequences replaced with U+FFFD)
 }
 ```
 
 ```typescript
 interface SerialDataEvent {
-  port: string;  // Port name, e.g. "COM3"
+  port: string;  // COM port name or "host:port" for Telnet sessions
   data: string;  // Received text chunk (may span multiple lines)
 }
 ```
 
 **Notes:**
 - `data` is a raw chunk, not a single line. It may contain multiple newlines, partial lines, or ANSI escape codes depending on the connected device.
-- Encoding is UTF-8 lossy: invalid byte sequences are silently replaced. Raw binary data is not supported in the current implementation.
+- Encoding is UTF-8 lossy: invalid byte sequences are silently replaced. Raw binary data is not supported.
+- For Telnet sessions, Telnet IAC control sequences are stripped before emission (see [`open_telnet_session`](#open_telnet_session)).
 
 ---
 
 ### `ConnectedDevice` (serial variant)
 
-How the device store represents a connected serial device. Not a Rust type — constructed entirely on the frontend.
+How the device store represents a connected serial or Telnet device. Not a Rust type — constructed entirely on the frontend.
 
 ```typescript
 interface ConnectedDevice {
-  id: string;      // Same as `serial` (the COM port name, e.g. "COM3")
+  id: string;      // COM port name (e.g. "COM3") or Telnet "host:port" (e.g. "192.168.1.1:23")
   type: "serial";
-  name: string;    // User-supplied label, or falls back to the port name
-  serial: string;  // COM port name, e.g. "COM3"
+  name: string;    // User-supplied label, or falls back to the id
+  serial: string;  // Same as id
   state: "connected";
 }
 ```
@@ -115,6 +116,62 @@ invoke<string[]>("list_serial_ports")
 **Notes:**
 - This command is synchronous on the Rust side (not async). Results reflect the port state at the moment of the call.
 - COM port numeric sort is applied via a custom comparator — `COM3 < COM10`, not the OS-default lexical order that would produce `COM10 < COM3`.
+
+---
+
+### `open_telnet_session`
+
+Connects to a remote host over TCP (Telnet) and starts a background read loop that emits `serial_data` events — identical in behaviour to a COM port session from the frontend's perspective.
+
+**Rust signature:**
+```rust
+#[tauri::command]
+async fn open_telnet_session(host: String, port: u16, app: AppHandle) -> Result<(), String>
+```
+
+**Frontend call:**
+```typescript
+invoke("open_telnet_session", { host, port })
+```
+
+**Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `host` | `string` | IP address or hostname, e.g. `"192.168.1.100"` |
+| `port` | `u16` | TCP port (default `23` for standard Telnet) |
+
+**Returns:** `void` on success.
+
+**Errors:**
+- Connection refused / host unreachable — error message from `TcpStream::connect`.
+- Host resolves but connection times out (OS default TCP timeout applies).
+
+**Behaviour:**
+1. Calls `TcpStream::connect("{host}:{port}")` inside `tokio::task::spawn_blocking` to avoid blocking the async runtime.
+2. Sets a 100 ms read timeout on the socket.
+3. Clones the stream — original stored in `TELNET_SESSIONS` for writing; clone passed to the read thread.
+4. Creates an `Arc<AtomicBool>` stop flag stored in `TELNET_FLAGS`.
+5. Spawns a `std::thread` running `telnet_read_loop`.
+
+**Telnet IAC negotiation:**
+The read loop strips RFC 854 Telnet control sequences before emitting data:
+
+| Received | Response sent | Data effect |
+|----------|---------------|-------------|
+| `IAC WILL x` | `IAC DONT x` | stripped |
+| `IAC DO x` | `IAC WONT x` | stripped |
+| `IAC WONT x` / `IAC DONT x` | none | stripped |
+| `IAC SB … IAC SE` | none | entire block stripped |
+| `IAC IAC` | none | emitted as literal `0xFF` |
+
+This is sufficient for all common serial-over-TCP adapters (ser2net, HW VSP, Lantronix). Full RFC 2217 (remote baud/flow control) is not supported.
+
+**Internal globals:**
+```rust
+static TELNET_SESSIONS: Lazy<Mutex<HashMap<String, Arc<Mutex<TcpStream>>>>>
+static TELNET_FLAGS:    Lazy<Mutex<HashMap<String, Arc<AtomicBool>>>>
+```
 
 ---
 
@@ -202,8 +259,8 @@ invoke("close_serial_port", { portName })
 **Errors:** Returns an error string if the `OPEN_PORTS` mutex is poisoned (should not occur in normal operation).
 
 **Behaviour:**
-1. Sets the port's `AtomicBool` stop flag to `true`. The read thread checks this flag at the top of its loop and exits on the next iteration.
-2. Removes the port handle from `OPEN_PORTS`, dropping it and closing the underlying OS handle.
+1. Sets the stop flag (`READER_FLAGS` for COM ports, `TELNET_FLAGS` for Telnet) to `true`. The read thread checks this flag at the top of its loop and exits on the next iteration.
+2. Removes the session from `OPEN_PORTS` (COM) or `TELNET_SESSIONS` (Telnet).
 
 **Note:** The read thread exits asynchronously after the stop flag is set. There may be one final `serial_data` event emitted from data already in the thread's buffer before it exits.
 
@@ -236,7 +293,7 @@ invoke("write_serial", { portName, data })
 **Returns:** `void` on success.
 
 **Errors:**
-- `"Port not open"` — the port was not opened with `open_serial_port` or has since been closed.
+- `"Port not open"` — the session ID is not present in either `OPEN_PORTS` (COM) or `TELNET_SESSIONS` (Telnet).
 - Any OS-level write error string (e.g. port disconnected mid-write).
 
 **Notes:**
@@ -380,7 +437,12 @@ export async function openPort(portName: string, baudRate: number): Promise<void
   return invoke("open_serial_port", { portName, baudRate });
 }
 
-/** Stops the read loop and closes the port. */
+/** Connects to a Telnet host and starts the read loop. Session ID is "host:port". */
+export async function openTelnetSession(host: string, port: number): Promise<void> {
+  return invoke("open_telnet_session", { host, port });
+}
+
+/** Stops the read loop and closes the port or Telnet session. */
 export async function closePort(portName: string): Promise<void> {
   return invoke("close_serial_port", { portName });
 }
@@ -498,6 +560,7 @@ startSequence()
 | Scenario | Backend behaviour | Frontend behaviour |
 |----------|-------------------|--------------------|
 | Port open fails (in use / not found) | Returns `Err(message)` | `ConnectModal` shows `message.error(String(e))` |
+| Telnet connect fails (refused / unreachable) | Returns `Err("Failed to connect to host:port: ...")` | `ConnectModal` shows `message.error(String(e))` |
 | Port write fails (disconnected mid-write) | Returns `Err(message)` | Shell tab shows `Error: {e}` in output area |
 | Port disconnected during read | Read loop emits `serial_disconnected` then exits | `useSerialDisconnect` removes device from store |
 | Sequence Runner: device was removed | `SeqEntry.device` is stale, but commands still attempt to run — `writeToPort` / `startShellStream` will fail | Error line appears in the device's output buffer; next step is still scheduled. User must press Stop manually. |

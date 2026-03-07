@@ -1,7 +1,7 @@
-# ADB & Serial Debug Tool — Design Document
+# DevBridge — Design Document
 
-> **Project Name**: DevBridge (tentative)
-> **Document Version**: v1.8
+> **Project Name**: DevBridge
+> **Document Version**: v2.0
 > **Author**: Personal Project
 > **Tech Stack**: Tauri 2 + Rust + React + TypeScript
 > **Last Updated**: 2026-03
@@ -30,14 +30,15 @@ During Android development and embedded device debugging, developers frequently 
 
 ### 1.2 Goals
 
-Build a Windows desktop debugging tool that unifies ADB device management and serial port debugging in a single interface, reducing repetitive operations, improving debugging efficiency, and making it easy to share with teammates.
+Build a Windows desktop debugging tool that unifies ADB device management, OpenHarmony (OHOS) device management, and serial/Telnet debugging in a single interface, reducing repetitive operations, improving debugging efficiency, and making it easy to share with teammates.
 
 ### 1.3 Core Value
 
 - Visually manage ADB-connected Android devices without manually typing commands
+- Visually manage HDC-connected OHOS devices (HarmonyOS / OpenHarmony)
 - Support multi-file batch transfer with real-time progress display
-- One-click logcat collection, filtering, and export
-- Integrated serial terminal with a quick-command panel (inspired by SSCOM's extension feature)
+- One-click logcat / HiLog collection, filtering, and export
+- Integrated serial terminal with Telnet support and a quick-command panel (inspired by SSCOM's extension feature)
 - Persistent configuration so frequently used settings and commands don't need to be re-entered
 
 ---
@@ -65,6 +66,7 @@ Build a Windows desktop debugging tool that unifies ADB device management and se
 |---------|-------------|----------|
 | Port Scan | Auto-scan and list available COM ports; COM ports sorted numerically (COM3 < COM10) | P0 |
 | Serial Connect | Configure baud rate and connect via ConnectModal dialog; port list refreshed on modal open and on tab switch | P0 |
+| Telnet Connect | Connect to a remote host:port over TCP (for serial-over-network adapters); shares the same Shell UI as COM ports | P1 |
 | Shell I/O | Real-time send/receive in unified Shell tab (plain text display) | P0 |
 | Quick Command Panel | Right-side panel for saving frequently used commands; click to send; supports add/delete; shared between ADB and serial | P0 |
 | Sequence Runner | Per-device loop runner in Quick Commands panel; cycles through commands with a configurable interval; independent per device; survives device switching | P1 |
@@ -73,6 +75,18 @@ Build a Windows desktop debugging tool that unifies ADB device management and se
 | ~~Send Settings~~ | ~~Configurable line ending, timed auto-send~~ | ~~Deferred~~ |
 
 > **Design decision**: Serial uses the same Shell tab as ADB — no separate "Serial Terminal" tab. The Shell tab detects the selected device type and dispatches to the appropriate backend (ADB shell vs serial write). Line ending is hardcoded to `\r\n` for now; configurable suffix is deferred.
+
+#### OHOS Module
+
+| Feature | Description | Priority |
+|---------|-------------|----------|
+| Device List | Real-time display of connected OHOS devices (USB + TCP) with auto-connect via `hdc list targets -v` | P0 |
+| File Manager | Visual browsing of device filesystem; supports upload, download, delete; remount status shown per device | P0 |
+| HiLog | Real-time HiLog streaming with level/keyword filtering and export | P0 |
+| Shell | Interactive shell via `hdc shell`; streaming output to unified Shell tab | P0 |
+| App Manager | List all HAP bundles with install path and type classification (user/product/vendor/system); install HAP, uninstall user apps, force stop, clear data | P1 |
+| Auto-Remount | Automatically runs `hdc target mount` on device connect; shows remount status in File Manager header | P1 |
+| TCP Connect | Connect to OHOS device over TCP via `hdc tconn` using Host + Port inputs | P1 |
 
 ### 2.2 Non-Functional Requirements
 
@@ -88,36 +102,38 @@ Build a Windows desktop debugging tool that unifies ADB device management and se
 ### 3.1 Overall Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│                     Frontend (WebView)                       │
-│   React + TypeScript + Ant Design + zustand                  │
-│                                                              │
-│   ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐  │
-│   │ Unified Shell│  │ File Manager │  │  Logcat           │  │
-│   │ (ADB+Serial) │  │              │  │                   │  │
-│   └──────────────┘  └──────────────┘  └──────────────────┘  │
-└─────────────────────────┬────────────────────────────────────┘
-                          │ Tauri IPC (invoke / emit)
-┌─────────────────────────▼────────────────────────────────────┐
-│                      Backend (Rust)                          │
-│                                                              │
-│  ┌─────────────────┐          ┌────────────────────────────┐ │
-│  │   ADB Manager   │          │     Serial Manager         │ │
-│  │                 │          │                            │ │
-│  │ - Device watcher│          │  - Port scan               │ │
-│  │ - Process mgmt  │          │  - Read thread (std::thread)│ │
-│  │ - Progress parse│          │  - Event emit to frontend  │ │
-│  └────────┬────────┘          └────────────┬───────────────┘ │
-│           │                               │                  │
-│  ┌────────▼────────┐          ┌────────────▼───────────────┐ │
-│  │   adb.exe       │          │   serialport-rs crate      │ │
-│  │  (bundled)      │          │                            │ │
-│  └─────────────────┘          └────────────────────────────┘ │
-│                                                              │
-│  ┌───────────────────────────────────────────────────────┐   │
-│  │          tauri-plugin-store (config persistence)       │   │
-│  └───────────────────────────────────────────────────────┘   │
-└──────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────┐
+│                          Frontend (WebView)                              │
+│            React + TypeScript + Ant Design + Zustand                     │
+│                                                                          │
+│  ┌────────────────┐  ┌──────────────┐  ┌────────────┐  ┌─────────────┐  │
+│  │ Unified Shell  │  │ File Manager │  │   Logcat / │  │ App Manager │  │
+│  │ (ADB+Serial+   │  │ (ADB + OHOS) │  │   HiLog    │  │ (ADB+OHOS)  │  │
+│  │  Telnet+OHOS)  │  │              │  │            │  │             │  │
+│  └────────────────┘  └──────────────┘  └────────────┘  └─────────────┘  │
+└──────────────────────────────┬───────────────────────────────────────────┘
+                               │ Tauri IPC (invoke / emit)
+┌──────────────────────────────▼───────────────────────────────────────────┐
+│                           Backend (Rust)                                 │
+│                                                                          │
+│  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────────┐   │
+│  │   ADB Manager    │  │   OHOS Manager   │  │   Serial Manager     │   │
+│  │                  │  │                  │  │                      │   │
+│  │ - Device watcher │  │ - Device watcher │  │ - COM port scan      │   │
+│  │ - Process mgmt   │  │ - Process mgmt   │  │ - COM read thread    │   │
+│  │ - Progress parse │  │ - Auto-remount   │  │ - Telnet TCP session │   │
+│  │ - root/remount   │  │ - Bundle mgmt    │  │ - IAC negotiation    │   │
+│  └────────┬─────────┘  └────────┬─────────┘  └──────────┬───────────┘   │
+│           │                     │                        │               │
+│  ┌────────▼──────┐  ┌───────────▼──────┐  ┌─────────────▼────────────┐  │
+│  │  adb.exe      │  │  hdc.exe         │  │  serialport-rs / TcpStream│  │
+│  │  (bundled)    │  │  (DevEco / PATH) │  │                          │  │
+│  └───────────────┘  └──────────────────┘  └──────────────────────────┘  │
+│                                                                          │
+│  ┌─────────────────────────────────────────────────────────────────┐     │
+│  │               tauri-plugin-store (config persistence)            │     │
+│  └─────────────────────────────────────────────────────────────────┘     │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### 3.2 Communication Model
@@ -133,14 +149,21 @@ The frontend and backend communicate via Tauri IPC:
 tokio Runtime
 │
 ├── Task: adb_device_watcher     # Polls `adb devices` every 2s; emits on change
-├── Task: logcat_reader          # Streams adb logcat stdout line-by-line; emits each line
-├── Task: shell_stream_reader    # Streams adb shell stdout+stderr in parallel; emits shell_output/shell_exit
-├── Task: file_transfer          # Streams push/pull progress; emits progress updates
+├── Task: adb_root_remount       # Attempts root + remount once per device per session
+├── Task: logcat_reader          # Streams adb logcat stdout; emits batches of parsed LogEntry
+├── Task: shell_stream_reader    # Streams adb shell stdout+stderr; emits shell_output/shell_exit
+├── Task: file_transfer          # Streams push/pull progress; emits transfer_progress
+│
+├── Task: hdc_device_watcher     # Polls `hdc list targets -v` every 2s; emits on change
+├── Task: hdc_remount            # Runs `hdc target mount` once per device per session
+├── Task: hilog_reader           # Streams HiLog output; emits batches of parsed HilogEntry
+├── Task: hdc_shell_stream       # Streams hdc shell output; emits hdc_shell_output/hdc_shell_exit
+├── Task: hdc_bundle_resolver    # Parallel bm dump -n calls via JoinSet for App Manager
 
 std::thread (native)
 │
-└── Thread: serial_reader        # Blocking serial read loop; emits received data as events
-                                 # Uses AtomicBool stop flag for clean shutdown
+├── Thread: serial_reader        # Blocking COM port read loop; AtomicBool stop flag
+└── Thread: telnet_reader        # Blocking TCP read loop with IAC stripping; AtomicBool stop flag
 ```
 
 ---
