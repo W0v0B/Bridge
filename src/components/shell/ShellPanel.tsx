@@ -94,18 +94,22 @@ export function ShellPanel() {
     }
   }, [selectedDeviceId]);
 
-  // Subscribe to incoming serial data
+  // Subscribe to incoming serial data — accumulate for all open ports, not just selected
   const handleSerialData = useCallback(
     (event: { port: string; data: string }) => {
-      if (selectedDevice?.type === "serial" && selectedDevice.serial === event.port) {
-        const deviceId = selectedDevice.id;
-        outputMap.current[deviceId] = trimToMaxLines(
-          (outputMap.current[deviceId] ?? "") + event.data
-        );
+      const device = devices.find(
+        (d) => d.type === "serial" && d.serial === event.port
+      );
+      if (!device) return;
+      outputMap.current[device.id] = trimToMaxLines(
+        (outputMap.current[device.id] ?? "") + event.data
+      );
+      // Only re-render if this port is currently visible
+      if (device.id === selectedDeviceId) {
         scheduleFlush();
       }
     },
-    [selectedDevice, scheduleFlush, trimToMaxLines]
+    [devices, selectedDeviceId, scheduleFlush, trimToMaxLines]
   );
   useSerialData(handleSerialData);
 
