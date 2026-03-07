@@ -43,10 +43,20 @@ fn parse_devices_output(output: &str) -> Vec<OhosDevice> {
         if parts.len() < 3 {
             continue;
         }
+        let connect_key = parts[0].to_string();
+        let state = parts.get(2).unwrap_or(&"Unknown").to_string();
+
+        // HDC always emits a "127.0.0.1:5555 TCP Offline localhost" loopback
+        // entry for its local emulator listener even when no device is attached.
+        // Hide it unless it actually becomes Connected (real emulator).
+        if connect_key == "127.0.0.1:5555" && state.eq_ignore_ascii_case("offline") {
+            continue;
+        }
+
         devices.push(OhosDevice {
-            connect_key: parts[0].to_string(),
+            connect_key,
             conn_type: parts.get(1).unwrap_or(&"USB").to_string(),
-            state: parts.get(2).unwrap_or(&"Unknown").to_string(),
+            state,
             name: parts.get(3).unwrap_or(&"").to_string(),
             is_remounted: false,
             remount_info: String::new(),
