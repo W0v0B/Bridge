@@ -1,8 +1,10 @@
 mod adb;
+mod hdc;
 mod serial;
 mod config;
 
 use adb::{apps, commands, device, file, logcat};
+use hdc::{apps as hdc_apps, commands as hdc_commands, device as hdc_device, file as hdc_file, hilog};
 use serial::manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -14,6 +16,7 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::default().build())
         .setup(|app| {
             device::start_device_watcher(app.handle().clone());
+            hdc_device::start_device_watcher(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -41,6 +44,27 @@ pub fn run() {
             stop_tlogcat,
             clear_device_log,
             export_logs,
+            // HDC device commands
+            get_ohos_devices,
+            connect_ohos_device,
+            // HDC shell commands
+            run_hdc_shell_command,
+            start_hdc_shell_stream,
+            stop_hdc_shell_stream,
+            // HDC file commands
+            list_hdc_files,
+            send_hdc_files,
+            recv_hdc_file,
+            delete_hdc_file,
+            // HDC hilog commands
+            start_hilog,
+            stop_hilog,
+            clear_hilog,
+            export_hilog,
+            // HDC app commands
+            list_bundles,
+            install_hap,
+            uninstall_bundle,
             // Serial commands
             list_serial_ports,
             open_serial_port,
@@ -180,6 +204,117 @@ async fn clear_device_log(serial: String) -> Result<(), String> {
 #[tauri::command]
 async fn export_logs(logs: Vec<logcat::LogEntry>, path: String) -> Result<(), String> {
     logcat::export_logs(logs, path).await
+}
+
+// ── HDC Device Commands ──
+
+#[tauri::command]
+async fn get_ohos_devices() -> Result<Vec<hdc_device::OhosDevice>, String> {
+    hdc_device::list_devices().await
+}
+
+#[tauri::command]
+async fn connect_ohos_device(addr: String) -> Result<String, String> {
+    hdc_device::connect_device(&addr).await
+}
+
+// ── HDC Shell Commands ──
+
+#[tauri::command]
+async fn run_hdc_shell_command(connect_key: String, command: String) -> Result<String, String> {
+    hdc_commands::run_hdc_shell(&connect_key, &command).await
+}
+
+#[tauri::command]
+async fn start_hdc_shell_stream(
+    connect_key: String,
+    command: String,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    hdc_commands::start_shell_stream(&connect_key, &command, app).await
+}
+
+#[tauri::command]
+async fn stop_hdc_shell_stream(connect_key: String) -> Result<(), String> {
+    hdc_commands::stop_shell_stream(&connect_key).await
+}
+
+// ── HDC File Commands ──
+
+#[tauri::command]
+async fn list_hdc_files(
+    connect_key: String,
+    path: String,
+) -> Result<Vec<hdc_file::FileEntry>, String> {
+    hdc_file::list_directory(&connect_key, &path).await
+}
+
+#[tauri::command]
+async fn send_hdc_files(
+    connect_key: String,
+    local_paths: Vec<String>,
+    remote_path: String,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    hdc_file::send_files(&connect_key, local_paths, &remote_path, app).await
+}
+
+#[tauri::command]
+async fn recv_hdc_file(
+    connect_key: String,
+    remote_path: String,
+    local_path: String,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    hdc_file::recv_file(&connect_key, &remote_path, &local_path, app).await
+}
+
+#[tauri::command]
+async fn delete_hdc_file(connect_key: String, path: String) -> Result<(), String> {
+    hdc_file::delete_file(&connect_key, &path).await
+}
+
+// ── HDC HiLog Commands ──
+
+#[tauri::command]
+async fn start_hilog(
+    connect_key: String,
+    filter: hilog::HilogFilter,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    hilog::start(&connect_key, filter, app).await
+}
+
+#[tauri::command]
+async fn stop_hilog(connect_key: String) -> Result<(), String> {
+    hilog::stop(&connect_key).await
+}
+
+#[tauri::command]
+async fn clear_hilog(connect_key: String) -> Result<(), String> {
+    hilog::clear(&connect_key).await
+}
+
+#[tauri::command]
+async fn export_hilog(entries: Vec<hilog::HilogEntry>, path: String) -> Result<(), String> {
+    hilog::export(entries, path).await
+}
+
+// ── HDC App Commands ──
+
+#[tauri::command]
+async fn list_bundles(connect_key: String) -> Result<Vec<hdc_apps::BundleInfo>, String> {
+    hdc_apps::list_bundles(&connect_key).await
+}
+
+#[tauri::command]
+async fn install_hap(connect_key: String, hap_path: String) -> Result<String, String> {
+    hdc_apps::install_hap(&connect_key, &hap_path).await
+}
+
+#[tauri::command]
+async fn uninstall_bundle(connect_key: String, bundle_name: String) -> Result<String, String> {
+    hdc_apps::uninstall_bundle(&connect_key, &bundle_name).await
 }
 
 // ── File Utilities ──

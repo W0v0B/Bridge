@@ -225,12 +225,11 @@ export function AppManager() {
             Install APK
           </Button>
           <Input
-            prefix={<SearchOutlined style={{ color: "#bfbfbf" }} />}
+            prefix={<SearchOutlined />}
             placeholder="Search packages…"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             allowClear
-            size="small"
             style={{ width: 220 }}
           />
           <Radio.Group
@@ -245,9 +244,9 @@ export function AppManager() {
               { label: "System", value: "system" },
             ]}
           />
-          <Button icon={<ReloadOutlined />} onClick={loadPackages} loading={loading}>
-            Refresh
-          </Button>
+          <Tooltip title="Refresh">
+            <Button icon={<ReloadOutlined />} onClick={loadPackages} loading={loading} />
+          </Tooltip>
         </Space>
       </div>
 

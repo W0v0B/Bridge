@@ -10,15 +10,18 @@ import { AppManager } from "./components/adb/AppManager";
 import { LogcatPanel } from "./components/adb/LogcatPanel";
 import { TransferQueue } from "./components/adb/TransferQueue";
 import { ShellPanel } from "./components/shell/ShellPanel";
+import { HilogPanel } from "./components/hdc/HilogPanel";
+import { HdcFileManager } from "./components/hdc/HdcFileManager";
+import { HdcAppManager } from "./components/hdc/HdcAppManager";
 import { useDeviceEvents } from "./hooks/useAdbEvents";
+import { useOhosDeviceEvents } from "./hooks/useHdcEvents";
 import { useSerialDisconnect } from "./hooks/useSerialEvents";
 import { useDeviceStore } from "./store/deviceStore";
 
 const { Content, Sider } = Layout;
 
 // Tab item arrays are module-level constants so the component instances inside
-// them are never recreated — their internal state (output buffers, logcat
-// entries, file listings) survives device switches.
+// them are never recreated — their internal state survives device switches.
 const adbTabs = [
   { key: "shell", label: "Shell", children: <ShellPanel /> },
   { key: "logcat", label: "Logcat", children: <LogcatPanel /> },
@@ -30,8 +33,16 @@ const serialTabs = [
   { key: "shell", label: "Shell", children: <ShellPanel /> },
 ];
 
+const ohosTabs = [
+  { key: "shell", label: "Shell", children: <ShellPanel /> },
+  { key: "hilog", label: "HiLog", children: <HilogPanel /> },
+  { key: "files", label: "File Manager", children: <HdcFileManager /> },
+  { key: "apps", label: "Apps", children: <HdcAppManager /> },
+];
+
 function App() {
   useDeviceEvents();
+  useOhosDeviceEvents();
   useSerialDisconnect();
   const [connectModalOpen, setConnectModalOpen] = useState(false);
 
@@ -66,11 +77,10 @@ function App() {
             {!selectedDevice && <WelcomePage />}
 
             {/*
-              Both tab containers are always mounted once their device type has
-              appeared. CSS display:none hides the inactive one without
-              unmounting it, so all panel state is preserved across switches.
-              destroyInactiveTabPane={false} keeps individual tab panels alive
-              when the user switches between Shell / Logcat / Files / Apps.
+              All three tab containers are always mounted once their device type has
+              appeared. CSS display:none hides the inactive ones without unmounting,
+              preserving all panel state across device-type switches.
+              destroyInactiveTabPane={false} keeps individual tab panels alive.
             */}
             <div
               style={{
@@ -100,6 +110,23 @@ function App() {
             >
               <Tabs
                 items={serialTabs}
+                destroyInactiveTabPane={false}
+                style={{ flex: 1 }}
+                tabBarStyle={{ marginBottom: 12 }}
+              />
+            </div>
+
+            <div
+              style={{
+                display: deviceType === "ohos" ? "flex" : "none",
+                flex: 1,
+                minHeight: 0,
+                padding: 16,
+                flexDirection: "column",
+              }}
+            >
+              <Tabs
+                items={ohosTabs}
                 destroyInactiveTabPane={false}
                 style={{ flex: 1 }}
                 tabBarStyle={{ marginBottom: 12 }}

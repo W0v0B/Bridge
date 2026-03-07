@@ -1,6 +1,6 @@
 export interface ConnectedDevice {
   id: string;
-  type: "adb" | "serial";
+  type: "adb" | "serial" | "ohos";
   name: string;
   serial: string;
   state: string;
@@ -8,4 +8,5 @@ export interface ConnectedDevice {
   product?: string;
   isRoot?: boolean;
   isRemounted?: boolean;
+  remountInfo?: string;
 }

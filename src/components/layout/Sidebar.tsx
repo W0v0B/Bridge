@@ -4,6 +4,7 @@ import {
   SettingOutlined,
   UsbOutlined,
   ApiOutlined,
+  MobileOutlined,
   DisconnectOutlined,
 } from "@ant-design/icons";
 import { useDeviceStore } from "../../store/deviceStore";
@@ -34,6 +35,7 @@ export function Sidebar({ onConnect }: SidebarProps) {
 
   const adbDevices = devices.filter((d) => d.type === "adb");
   const serialDevices = devices.filter((d) => d.type === "serial");
+  const ohosDevices = devices.filter((d) => d.type === "ohos");
 
   const handleDisconnect = async (device: ConnectedDevice) => {
     try {
@@ -41,8 +43,12 @@ export function Sidebar({ onConnect }: SidebarProps) {
         await disconnectDevice(device.serial);
         const updated = await getDevices();
         syncAdbDevices(updated);
-      } else {
+      } else if (device.type === "serial") {
         await closePort(device.serial);
+        removeDevice(device.id);
+      } else {
+        // OHOS devices are removed from list when disconnected physically;
+        // no explicit disconnect command needed.
         removeDevice(device.id);
       }
     } catch {
@@ -53,6 +59,10 @@ export function Sidebar({ onConnect }: SidebarProps) {
   const renderDevice = (device: ConnectedDevice) => {
     const isSelected = device.id === selectedDeviceId;
     const dotColor = stateColors[device.state] || "#d9d9d9";
+    const canDisconnect =
+      device.serial.includes(":") ||
+      device.type === "serial" ||
+      device.type === "ohos";
 
     return (
       <div
@@ -88,7 +98,7 @@ export function Sidebar({ onConnect }: SidebarProps) {
         >
           {device.name}
         </Text>
-        {device.serial.includes(":") || device.type === "serial" ? (
+        {canDisconnect ? (
           <Tooltip title="Disconnect">
             <DisconnectOutlined
               style={{ fontSize: 12, color: "#8c8c8c" }}
@@ -174,6 +184,11 @@ export function Sidebar({ onConnect }: SidebarProps) {
           "ADB Devices",
           <UsbOutlined style={{ fontSize: 11 }} />,
           adbDevices
+        )}
+        {renderGroup(
+          "OHOS Devices",
+          <MobileOutlined style={{ fontSize: 11 }} />,
+          ohosDevices
         )}
         {renderGroup(
           "Serial Devices",

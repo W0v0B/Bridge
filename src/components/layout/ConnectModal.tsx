@@ -9,11 +9,15 @@ import {
   Button,
   message,
   Tooltip,
+  Typography,
 } from "antd";
 import { ReloadOutlined } from "@ant-design/icons";
 import { connectNetworkDevice, getDevices } from "../../utils/adb";
+import { connectOhosDevice, getOhosDevices } from "../../utils/hdc";
 import { listPorts, openPort } from "../../utils/serial";
 import { useDeviceStore } from "../../store/deviceStore";
+
+const { Text } = Typography;
 
 interface ConnectModalProps {
   open: boolean;
@@ -21,7 +25,7 @@ interface ConnectModalProps {
 }
 
 export function ConnectModal({ open, onClose }: ConnectModalProps) {
-  const [mode, setMode] = useState<"ADB" | "Serial">("ADB");
+  const [mode, setMode] = useState<"ADB" | "OHOS" | "Serial">("ADB");
   const [loading, setLoading] = useState(false);
   const [portsLoading, setPortsLoading] = useState(false);
 
@@ -29,6 +33,10 @@ export function ConnectModal({ open, onClose }: ConnectModalProps) {
   const [host, setHost] = useState("192.168.1.100");
   const [port, setPort] = useState(5555);
   const [adbName, setAdbName] = useState("");
+
+  // OHOS fields
+  const [ohosAddr, setOhosAddr] = useState("192.168.1.100:5555");
+  const [ohosName, setOhosName] = useState("");
 
   // Serial fields
   const [ports, setPorts] = useState<string[]>([]);
@@ -38,6 +46,7 @@ export function ConnectModal({ open, onClose }: ConnectModalProps) {
 
   const addDevice = useDeviceStore((s) => s.addDevice);
   const syncAdbDevices = useDeviceStore((s) => s.syncAdbDevices);
+  const syncOhosDevices = useDeviceStore((s) => s.syncOhosDevices);
 
   const fetchPorts = async () => {
     setPortsLoading(true);
@@ -66,9 +75,30 @@ export function ConnectModal({ open, onClose }: ConnectModalProps) {
 
       const serial = `${host}:${port}`;
       const name = adbName.trim() || serial;
-      // The device should now exist from syncAdbDevices; update its name if custom
       if (adbName.trim()) {
         useDeviceStore.getState().updateDevice(serial, { name });
+      }
+
+      onClose();
+    } catch (e) {
+      message.error(String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleOhosConnect = async () => {
+    const addr = ohosAddr.trim();
+    if (!addr) return;
+    setLoading(true);
+    try {
+      const result = await connectOhosDevice(addr);
+      message.success(result || `Connected to ${addr}`);
+      const devices = await getOhosDevices();
+      syncOhosDevices(devices);
+
+      if (ohosName.trim()) {
+        useDeviceStore.getState().updateDevice(addr, { name: ohosName.trim() });
       }
 
       onClose();
@@ -101,6 +131,12 @@ export function ConnectModal({ open, onClose }: ConnectModalProps) {
     }
   };
 
+  const handleConnect = () => {
+    if (mode === "ADB") return handleAdbConnect();
+    if (mode === "OHOS") return handleOhosConnect();
+    return handleSerialConnect();
+  };
+
   return (
     <Modal
       title="Connect Device"
@@ -110,20 +146,16 @@ export function ConnectModal({ open, onClose }: ConnectModalProps) {
         if (visible) handleOpen();
       }}
       footer={
-        <Button
-          type="primary"
-          loading={loading}
-          onClick={mode === "ADB" ? handleAdbConnect : handleSerialConnect}
-        >
+        <Button type="primary" loading={loading} onClick={handleConnect}>
           Connect
         </Button>
       }
     >
       <Segmented
-        options={["ADB", "Serial"]}
+        options={["ADB", "OHOS", "Serial"]}
         value={mode}
         onChange={(v) => {
-          const next = v as "ADB" | "Serial";
+          const next = v as "ADB" | "OHOS" | "Serial";
           setMode(next);
           if (next === "Serial") fetchPorts();
         }}
@@ -131,7 +163,7 @@ export function ConnectModal({ open, onClose }: ConnectModalProps) {
         style={{ marginBottom: 16 }}
       />
 
-      {mode === "ADB" ? (
+      {mode === "ADB" && (
         <Form layout="vertical">
           <Form.Item label="Host">
             <Input
@@ -157,7 +189,35 @@ export function ConnectModal({ open, onClose }: ConnectModalProps) {
             />
           </Form.Item>
         </Form>
-      ) : (
+      )}
+
+      {mode === "OHOS" && (
+        <Form layout="vertical">
+          <Form.Item
+            label="TCP Address"
+            extra={
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                USB devices appear automatically in the sidebar. Use this to connect over TCP (hdc tconn).
+              </Text>
+            }
+          >
+            <Input
+              value={ohosAddr}
+              onChange={(e) => setOhosAddr(e.target.value)}
+              placeholder="192.168.1.100:5555"
+            />
+          </Form.Item>
+          <Form.Item label="Name (optional)">
+            <Input
+              value={ohosName}
+              onChange={(e) => setOhosName(e.target.value)}
+              placeholder={ohosAddr || "Device name"}
+            />
+          </Form.Item>
+        </Form>
+      )}
+
+      {mode === "Serial" && (
         <Form layout="vertical">
           <Form.Item label="Port">
             <div style={{ display: "flex", gap: 8 }}>

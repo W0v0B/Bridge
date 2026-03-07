@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { AdbDevice } from "../types/adb";
+import type { OhosDevice } from "../types/hdc";
 import type { ConnectedDevice } from "../types/device";
 
 interface DeviceState {
@@ -10,6 +11,7 @@ interface DeviceState {
   updateDevice: (id: string, partial: Partial<ConnectedDevice>) => void;
   selectDevice: (id: string | null) => void;
   syncAdbDevices: (adbDevices: AdbDevice[]) => void;
+  syncOhosDevices: (ohosDevices: OhosDevice[]) => void;
 }
 
 export const useDeviceStore = create<DeviceState>((set) => ({
@@ -63,5 +65,31 @@ export const useDeviceStore = create<DeviceState>((set) => ({
       });
 
       return { devices: [...nonAdb, ...synced] };
+    }),
+
+  syncOhosDevices: (ohosDevices) =>
+    set((state) => {
+      const existing = new Map(
+        state.devices
+          .filter((d) => d.type === "ohos")
+          .map((d) => [d.serial, d])
+      );
+      const nonOhos = state.devices.filter((d) => d.type !== "ohos");
+
+      const synced: ConnectedDevice[] = ohosDevices.map((od) => {
+        const prev = existing.get(od.connect_key);
+        return {
+          id: od.connect_key,
+          type: "ohos" as const,
+          name: prev?.name || od.name || od.connect_key,
+          serial: od.connect_key,
+          state: od.state.toLowerCase(),
+          model: od.conn_type, // "USB" or "TCP"
+          isRemounted: od.is_remounted,
+          remountInfo: od.remount_info,
+        };
+      });
+
+      return { devices: [...nonOhos, ...synced] };
     }),
 }));

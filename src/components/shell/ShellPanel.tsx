@@ -10,9 +10,11 @@ import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { useDeviceStore } from "../../store/deviceStore";
 import { useConfigStore } from "../../store/configStore";
 import { startShellStream, stopShellStream } from "../../utils/adb";
+import { startHdcShellStream, stopHdcShellStream } from "../../utils/hdc";
 import { writeToPort } from "../../utils/serial";
 import { useSerialData } from "../../hooks/useSerialEvents";
 import { useShellOutput, useShellExit } from "../../hooks/useShellEvents";
+import { useHdcShellOutput, useHdcShellExit } from "../../hooks/useHdcEvents";
 import { QuickCommandsPanel } from "./QuickCommandsPanel";
 
 const { Text } = Typography;
@@ -27,7 +29,6 @@ export function ShellPanel() {
   const outputMap = useRef<Record<string, string>>({});
   const inputMap = useRef<Record<string, string>>({});
   const runningMap = useRef<Record<string, boolean>>({});
-  // Per-device log-to-file paths (null = not logging)
   const logFileMap = useRef<Record<string, string | null>>({});
 
   const [output, setOutput] = useState("");
@@ -42,7 +43,6 @@ export function ShellPanel() {
   const maxLinesRef = useRef(shellMaxLines);
   maxLinesRef.current = shellMaxLines;
 
-  /** Keep only the last N lines of a string buffer. */
   const trimToMaxLines = useCallback((text: string): string => {
     const max = maxLinesRef.current;
     if (max <= 0) return text;
@@ -56,7 +56,6 @@ export function ShellPanel() {
     return idx > 0 ? text.slice(idx + 1) : text;
   }, []);
 
-  // Sync per-device UI state when switching devices
   useEffect(() => {
     if (selectedDeviceId) {
       setOutput(outputMap.current[selectedDeviceId] ?? "");
@@ -72,7 +71,6 @@ export function ShellPanel() {
     }
   }, [output]);
 
-  // Schedule a batched render — at most once per animation frame
   const scheduleFlush = useCallback(() => {
     if (pendingFlush.current) return;
     pendingFlush.current = true;
@@ -88,11 +86,6 @@ export function ShellPanel() {
     return () => cancelAnimationFrame(rafId.current);
   }, []);
 
-  /**
-   * Central write helper — accumulates text into the device's output buffer,
-   * flushes to UI if the device is currently visible, and appends to the
-   * per-device log file if one is active.
-   */
   const writeToDeviceBuffer = useCallback((deviceId: string, text: string) => {
     outputMap.current[deviceId] = trimToMaxLines(
       (outputMap.current[deviceId] ?? "") + text
@@ -106,7 +99,6 @@ export function ShellPanel() {
     }
   }, [selectedDeviceId, scheduleFlush, trimToMaxLines]);
 
-  // appendOutput is called by QuickCommandsPanel with an optional target deviceId
   const appendOutput = useCallback((text: string, deviceId?: string) => {
     const targetId = deviceId ?? selectedDeviceId;
     if (!targetId) return;
@@ -120,7 +112,7 @@ export function ShellPanel() {
     }
   }, [selectedDeviceId]);
 
-  // Subscribe to incoming serial data — accumulate for all open ports
+  // Serial data events
   const handleSerialData = useCallback(
     (event: { port: string; data: string }) => {
       const device = devices.find(
@@ -133,7 +125,7 @@ export function ShellPanel() {
   );
   useSerialData(handleSerialData);
 
-  // Subscribe to shell streaming events
+  // ADB shell output events
   useShellOutput(
     useCallback(
       (event) => {
@@ -162,12 +154,42 @@ export function ShellPanel() {
     )
   );
 
+  // HDC shell output events
+  useHdcShellOutput(
+    useCallback(
+      (event) => {
+        const device = devices.find(
+          (d) => d.type === "ohos" && d.serial === event.connect_key
+        );
+        if (!device) return;
+        writeToDeviceBuffer(device.id, event.data);
+      },
+      [devices, writeToDeviceBuffer]
+    )
+  );
+
+  useHdcShellExit(
+    useCallback(
+      (event) => {
+        const device = devices.find(
+          (d) => d.type === "ohos" && d.serial === event.connect_key
+        );
+        if (!device) return;
+        const exitLine = `\n[Process exited with code ${event.code}]\n`;
+        writeToDeviceBuffer(device.id, exitLine);
+        setDeviceRunning(device.id, false);
+      },
+      [devices, writeToDeviceBuffer, setDeviceRunning]
+    )
+  );
+
   const handleCommand = async () => {
     const cmd = input.trim();
     if (!cmd || !selectedDevice) return;
 
     setInput("");
     if (selectedDeviceId) inputMap.current[selectedDeviceId] = "";
+
     if (selectedDevice.type === "adb") {
       appendOutput(`$ ${cmd}\n`);
       setDeviceRunning(selectedDevice.id, true);
@@ -177,7 +199,17 @@ export function ShellPanel() {
         appendOutput(`Error: ${e}\n`);
         setDeviceRunning(selectedDevice.id, false);
       }
+    } else if (selectedDevice.type === "ohos") {
+      appendOutput(`$ ${cmd}\n`);
+      setDeviceRunning(selectedDevice.id, true);
+      try {
+        await startHdcShellStream(selectedDevice.serial, cmd);
+      } catch (e) {
+        appendOutput(`Error: ${e}\n`);
+        setDeviceRunning(selectedDevice.id, false);
+      }
     } else {
+      // Serial
       appendOutput(`> ${cmd}\n`);
       try {
         await writeToPort(selectedDevice.serial, cmd + "\r\n");
@@ -190,7 +222,11 @@ export function ShellPanel() {
   const handleStop = async () => {
     if (!selectedDevice) return;
     try {
-      await stopShellStream(selectedDevice.serial);
+      if (selectedDevice.type === "adb") {
+        await stopShellStream(selectedDevice.serial);
+      } else if (selectedDevice.type === "ohos") {
+        await stopHdcShellStream(selectedDevice.serial);
+      }
     } catch {
       // Process may have already exited
     }
@@ -231,7 +267,7 @@ export function ShellPanel() {
     const path = await save({ defaultPath: makeLogFilename(), filters: [{ name: "Text", extensions: ["txt"] }] });
     if (!path) return;
     try {
-      await writeTextFileTo(path, ""); // create/truncate the file
+      await writeTextFileTo(path, "");
       logFileMap.current[selectedDeviceId] = path;
       setLogToFile(true);
       message.success("Logging to file started");
@@ -239,6 +275,20 @@ export function ShellPanel() {
       message.error(String(e));
     }
   };
+
+  const shellLabel = selectedDevice?.type === "adb"
+    ? "adb shell"
+    : selectedDevice?.type === "ohos"
+    ? "hdc shell"
+    : "serial";
+
+  const inputPlaceholder = selectedDevice?.type === "adb"
+    ? "adb shell command..."
+    : selectedDevice?.type === "ohos"
+    ? "hdc shell command..."
+    : "serial command...";
+
+  const inputPrefix = selectedDevice?.type === "serial" ? ">" : "$";
 
   if (!selectedDevice) {
     return (
@@ -293,8 +343,7 @@ export function ShellPanel() {
               }}
             />
             <Text style={{ color: "#ccc", fontSize: 12, flex: 1 }}>
-              {selectedDevice.type === "adb" ? "adb shell" : "serial"} —{" "}
-              {selectedDevice.name}
+              {shellLabel} — {selectedDevice.name}
             </Text>
             {showSettings && (
               <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
@@ -383,11 +432,7 @@ export function ShellPanel() {
                 if (selectedDeviceId) inputMap.current[selectedDeviceId] = e.target.value;
               }}
               onPressEnter={handleCommand}
-              placeholder={
-                selectedDevice.type === "adb"
-                  ? "adb shell command..."
-                  : "serial command..."
-              }
+              placeholder={inputPlaceholder}
               disabled={running}
               variant="borderless"
               style={{
@@ -399,7 +444,7 @@ export function ShellPanel() {
               }}
               prefix={
                 <span style={{ color: "#6a9955", marginRight: 4 }}>
-                  {selectedDevice.type === "adb" ? "$" : ">"}
+                  {inputPrefix}
                 </span>
               }
             />

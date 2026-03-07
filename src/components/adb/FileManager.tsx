@@ -209,18 +209,17 @@ export function FileManager() {
                 Delete
               </Button>
             </Popconfirm>
-            <Button icon={<ReloadOutlined />} onClick={loadFiles}>
-              Refresh
-            </Button>
             <Input
-              prefix={<SearchOutlined style={{ color: "#bfbfbf" }} />}
+              prefix={<SearchOutlined />}
               placeholder="Filter by name…"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               allowClear
-              size="small"
-              style={{ width: 180 }}
+              style={{ width: 220 }}
             />
+            <Tooltip title="Refresh">
+              <Button icon={<ReloadOutlined />} onClick={loadFiles} loading={loading} />
+            </Tooltip>
           </Space>
 
           <Space size={4}>
