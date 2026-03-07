@@ -1,7 +1,7 @@
 # ADB & Serial Debug Tool — Design Document
 
 > **Project Name**: DevBridge (tentative)
-> **Document Version**: v1.6
+> **Document Version**: v1.7
 > **Author**: Personal Project
 > **Tech Stack**: Tauri 2 + Rust + React + TypeScript
 > **Last Updated**: 2026-03
@@ -499,22 +499,60 @@ Stored via `tauri-plugin-store` at `%APPDATA%/DevBridge/config.json`.
 ┌─────────────────────────────────────────────────────────────────┐
 │  Toolbar: Logo | Device Info | Connect Button | Settings        │
 ├──────────────────┬──────────────────────────────────────────────┤
-│                  │  Tabs: [Shell] [Logcat] [File Manager] [Apps] │
+│                  │  (main area — content depends on selection)  │
 │  Left Sidebar    │ ──────────────────────────────────────────── │
 │                  │                                              │
-│  Unified Device  │              Main Work Area                  │
-│  List            │                                              │
-│  ┌────────────┐  │  (Content switches based on active Tab       │
-│  │ 📱 Dev-1   │  │   and selected device type)                  │
+│  Unified Device  │   No device selected  →  Welcome Page        │
+│  List            │   ADB device selected →  Shell / Logcat /    │
+│  ┌────────────┐  │                          File Manager / Apps  │
+│  │ 📱 Dev-1   │  │   Serial device selected → Shell only        │
 │  │ 📱 emu-1   │  │                                              │
-│  │ ○ COM3     │  │  Shell tab: works for both ADB and serial    │
-│  │ ○ COM7     │  │  Logcat/Files: ADB-only features             │
+│  │ ○ COM3     │  │                                              │
+│  │ ○ COM7     │  │                                              │
 │  └────────────┘  │                                              │
 │                  │                                              │
 │  [+ Connect]     │                                              │
 ├──────────────────┴──────────────────────────────────────────────┤
 │  Status Bar: Device Count | Connection Status                    │
 └─────────────────────────────────────────────────────────────────┘
+```
+
+**Main area rendering logic** (`App.tsx`):
+- `selectedDevice === null` → renders `<WelcomePage />`
+- `selectedDevice.type === "adb"` → renders `<Tabs key="adb">` with Shell, Logcat, File Manager, Apps tabs
+- `selectedDevice.type === "serial"` → renders `<Tabs key="serial">` with Shell tab only
+
+The `key` prop on `<Tabs>` ensures AntD resets the active tab when switching between device types.
+
+### 6.1.1 Welcome Page (`WelcomePage.tsx`)
+
+Shown when no device is selected. Centered, scrollable layout with a max-width of 680px.
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                                                                  │
+│   DevBridge                                                      │
+│   ADB & Serial Port Debugging Tool                               │
+│   ─────────────────────────────────────────────────────────────  │
+│   GET STARTED                                                    │
+│                                                                  │
+│   [USB icon]  Connect ADB (USB)    [Port icon]  Open Serial Port │
+│   Plug in device, enable USB       Click "+ Connect", pick COM   │
+│   Debugging. Auto-detected.        port and baud rate.           │
+│                                                                  │
+│   [Net icon]  Connect ADB (Network)[ADB icon]  Root & Remount   │
+│   Click "+ Connect", enter IP:port.DevBridge auto-attempts root  │
+│   Requires USB Debug or tcpip.     Status shown in File Manager. │
+│                                                                  │
+│   ─────────────────────────────────────────────────────────────  │
+│   WHAT YOU CAN DO                                                │
+│                                                                  │
+│   Shell    Run commands on ADB or serial   Files   Browse, up/   │
+│   Logcat   Stream, filter, export logs     Apps    List, install │
+│                                                                  │
+│   ─────────────────────────────────────────────────────────────  │
+│   Select a device from the sidebar to get started.               │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ### 6.2 Shell Tab Layout (Unified for ADB + Serial)
@@ -727,6 +765,7 @@ Bundle `adb.exe`, `AdbWinApi.dll`, and `AdbWinUsbApi.dll` inside the app's `reso
 
 - [x] App Manager tab: list packages (user + system), install APK, uninstall/disable
 - [x] Shell stderr forwarded to terminal output (command-not-found errors now visible)
+- [x] Context-adaptive main area: welcome page, ADB tabs, serial Shell-only tab
 - [ ] Config persistence (tauri-plugin-store)
 - [ ] Bundle adb.exe into installer
 - [ ] Network ADB connection
@@ -765,13 +804,14 @@ DevBridge/
 │
 ├── src/                        # React frontend
 │   ├── main.tsx                # Entry point
-│   ├── App.tsx                 # Root component: Layout + Tabs + hooks
+│   ├── App.tsx                 # Root component: Layout + context-adaptive main area + hooks
 │   ├── components/
 │   │   ├── layout/
 │   │   │   ├── Sidebar.tsx     # Left sidebar: unified device list (ADB + serial)
 │   │   │   ├── Toolbar.tsx     # Top toolbar
 │   │   │   ├── StatusBar.tsx   # Bottom status bar
-│   │   │   └── ConnectModal.tsx # Dialog for serial/network ADB connection
+│   │   │   ├── ConnectModal.tsx # Dialog for serial/network ADB connection
+│   │   │   └── WelcomePage.tsx  # Welcome screen (shown when no device is selected)
 │   │   ├── adb/
 │   │   │   ├── FileManager.tsx
 │   │   │   ├── CatModal.tsx        # View (cat) modal: text/hex, size limit, auto-refresh
