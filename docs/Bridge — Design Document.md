@@ -1,6 +1,6 @@
-# DevBridge — Design Document
+# Bridge — Design Document
 
-> **Project Name**: DevBridge
+> **Project Name**: Bridge
 > **Document Version**: v2.0
 > **Author**: Personal Project
 > **Tech Stack**: Tauri 2 + Rust + React + TypeScript
@@ -508,7 +508,7 @@ interface ConnectedDevice {
 
 ### 5.1 Persistent Configuration
 
-Stored via `tauri-plugin-store` at `%APPDATA%/DevBridge/config.json`.
+Stored via `tauri-plugin-store` at `%APPDATA%/Bridge/config.json`.
 
 ```jsonc
 {
@@ -582,7 +582,7 @@ Shown when no device is selected. Centered, scrollable layout with a max-width o
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │                                                                  │
-│   DevBridge                                                      │
+│   Bridge                                                      │
 │   ADB & Serial Port Debugging Tool                               │
 │   ─────────────────────────────────────────────────────────────  │
 │   GET STARTED                                                    │
@@ -592,7 +592,7 @@ Shown when no device is selected. Centered, scrollable layout with a max-width o
 │   Debugging. Auto-detected.        port and baud rate.           │
 │                                                                  │
 │   [Net icon]  Connect ADB (Network)[ADB icon]  Root & Remount   │
-│   Click "+ Connect", enter IP:port.DevBridge auto-attempts root  │
+│   Click "+ Connect", enter IP:port.Bridge auto-attempts root  │
 │   Requires USB Debug or tcpip.     Status shown in File Manager. │
 │                                                                  │
 │   ─────────────────────────────────────────────────────────────  │
@@ -842,7 +842,7 @@ Bundle `adb.exe`, `AdbWinApi.dll`, and `AdbWinUsbApi.dll` inside the app's `reso
 ## 9. Directory Structure
 
 ```
-DevBridge/
+Bridge/
 ├── src-tauri/                  # Rust backend
 │   ├── src/
 │   │   ├── main.rs             # Entry point

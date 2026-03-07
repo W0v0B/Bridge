@@ -166,7 +166,7 @@ export function Sidebar({ onConnect }: SidebarProps) {
         }}
       >
         <Text strong style={{ fontSize: 16 }}>
-          DevBridge
+          Bridge
         </Text>
         <Tooltip title="Connect device">
           <Button

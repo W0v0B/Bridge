@@ -1,12 +1,12 @@
 [package]
-name = "devbridge"
+name = "bridge"
 version = "0.1.0"
-description = "ADB & Serial Port Debugging Tools"
-authors = ["DevBridge"]
+description = "Device Debugging Toolkit"
+authors = ["Bridge"]
 edition = "2021"
 
 [lib]
-name = "devbridge_lib"
+name = "bridge_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

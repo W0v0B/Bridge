@@ -1,6 +1,6 @@
 # ADB Module — API Reference
 
-> **Project**: DevBridge
+> **Project**: Bridge
 > **Module**: ADB (`src-tauri/src/adb/`, `src/utils/adb.ts`)
 > **Last Updated**: 2026-03
 

@@ -1,6 +1,6 @@
 # Serial Module — API Reference
 
-> **Project**: DevBridge
+> **Project**: Bridge
 > **Module**: Serial (`src-tauri/src/serial/`, `src/utils/serial.ts`, `src/utils/fs.ts`)
 > **Last Updated**: 2026-03
 

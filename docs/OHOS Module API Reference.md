@@ -1,6 +1,6 @@
 # OHOS Module — API Reference
 
-> **Project**: DevBridge
+> **Project**: Bridge
 > **Module**: OHOS / HDC (`src-tauri/src/hdc/`, `src/utils/hdc.ts`)
 > **Last Updated**: 2026-03
 

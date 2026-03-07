@@ -15,7 +15,8 @@ export function StatusBar() {
   return (
     <Footer
       style={{
-        padding: "6px 16px",
+        padding: "8px 16px",
+      minHeight: 49,
         background: "#fff",
         borderTop: "1px solid #f0f0f0",
         display: "flex",
