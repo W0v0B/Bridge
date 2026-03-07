@@ -548,7 +548,7 @@ Stored via `tauri-plugin-store` at `%APPDATA%/Bridge/config.json`.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  Toolbar: Logo | Device Info | Connect Button | Settings        │
+│ [▪] Bridge   ············drag············  [Refresh] [–] [□] [✕]│  TitleBar (36px, frameless)
 ├──────────────────┬──────────────────────────────────────────────┤
 │                  │  (main area — content depends on selection)  │
 │  Left Sidebar    │ ──────────────────────────────────────────── │
@@ -556,9 +556,9 @@ Stored via `tauri-plugin-store` at `%APPDATA%/Bridge/config.json`.
 │  Unified Device  │   No device selected  →  Welcome Page        │
 │  List            │   ADB device selected →  Shell / Logcat /    │
 │  ┌────────────┐  │                          File Manager / Apps  │
-│  │ 📱 Dev-1   │  │   Serial device selected → Shell only        │
-│  │ 📱 emu-1   │  │                                              │
-│  │ ○ COM3     │  │                                              │
+│  │ 📱 Dev-1   │  │   OHOS device selected →  Shell / HiLog /   │
+│  │ 📱 emu-1   │  │                          File Manager / Apps  │
+│  │ ○ COM3     │  │   Serial device selected → Shell only        │
 │  │ ○ COM7     │  │                                              │
 │  └────────────┘  │                                              │
 │                  │                                              │
@@ -568,41 +568,37 @@ Stored via `tauri-plugin-store` at `%APPDATA%/Bridge/config.json`.
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+The window uses **`decorations: false`** (frameless) with `shadow: true`. The custom `TitleBar` component spans the full window width and provides:
+- Left: 16 px app icon + "Bridge" text
+- Centre: `data-tauri-drag-region` spacer + Refresh button + active device name
+- Right: standard window controls (minimise / maximise-restore / close) with Windows-convention hover colours
+
 **Main area rendering logic** (`App.tsx`):
 - `selectedDevice === null` → renders `<WelcomePage />` only
 - Both the ADB tab container and the Serial tab container are **always mounted** once a device of that type has been connected. The inactive container is hidden with `display: none` — it is never unmounted.
-- `destroyInactiveTabPane={false}` on each `<Tabs>` keeps individual tab panels (Shell, Logcat, Files, Apps) alive when switching between tabs.
+- `destroyOnHidden={false}` on each `<Tabs>` keeps individual tab panels (Shell, Logcat, Files, Apps) alive when switching between tabs.
 
 This ensures all shell output buffers, logcat entries, and file listings are preserved across device-type switches without requiring a global store.
 
 ### 6.1.1 Welcome Page (`WelcomePage.tsx`)
 
-Shown when no device is selected. Centered, scrollable layout with a max-width of 680px.
+Shown when no device is selected. Vertically and horizontally centred within the content area (fixed 560 px inner column).
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │                                                                  │
-│   Bridge                                                      │
-│   ADB & Serial Port Debugging Tool                               │
-│   ─────────────────────────────────────────────────────────────  │
-│   GET STARTED                                                    │
+│                        [App Icon 96px]                           │
+│                    Device Debugging Toolkit                      │
 │                                                                  │
-│   [USB icon]  Connect ADB (USB)    [Port icon]  Open Serial Port │
-│   Plug in device, enable USB       Click "+ Connect", pick COM   │
-│   Debugging. Auto-detected.        port and baud rate.           │
+│   ┌─────────────────┐ ┌──────────────────┐ ┌─────────────────┐  │
+│   │  ADB Devices    │ │  OHOS Devices    │ │ Serial / Telnet │  │
+│   │  • Shell        │ │  • Shell         │ │  • Shell        │  │
+│   │  • Logcat       │ │  • HiLog         │ │                 │  │
+│   │  • File Manager │ │  • File Manager  │ │                 │  │
+│   │  • App Manager  │ │  • App Manager   │ │                 │  │
+│   └─────────────────┘ └──────────────────┘ └─────────────────┘  │
 │                                                                  │
-│   [Net icon]  Connect ADB (Network)[ADB icon]  Root & Remount   │
-│   Click "+ Connect", enter IP:port.Bridge auto-attempts root  │
-│   Requires USB Debug or tcpip.     Status shown in File Manager. │
-│                                                                  │
-│   ─────────────────────────────────────────────────────────────  │
-│   WHAT YOU CAN DO                                                │
-│                                                                  │
-│   Shell    Run commands on ADB or serial   Files   Browse, up/   │
-│   Logcat   Stream, filter, export logs     Apps    List, install │
-│                                                                  │
-│   ─────────────────────────────────────────────────────────────  │
-│   Select a device from the sidebar to get started.               │
+│           Click + in the sidebar to connect a device.            │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -873,7 +869,7 @@ Bridge/
 │   ├── components/
 │   │   ├── layout/
 │   │   │   ├── Sidebar.tsx     # Left sidebar: unified device list (ADB + serial)
-│   │   │   ├── Toolbar.tsx     # Top toolbar
+│   │   │   ├── TitleBar.tsx    # Frameless custom titlebar: drag region, Refresh, window controls
 │   │   │   ├── StatusBar.tsx   # Bottom status bar
 │   │   │   ├── ConnectModal.tsx # Dialog for serial/network ADB connection
 │   │   │   └── WelcomePage.tsx  # Welcome screen (shown when no device is selected)

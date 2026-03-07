@@ -1,3 +1,21 @@
+/* ── Theme tokens ────────────────────────────────────────────
+   All colour values live here. To add a new theme: define a
+   [data-theme="name"] block that overrides these variables and
+   pass the same values to Ant Design's ConfigProvider tokens.
+───────────────────────────────────────────────────────────── */
+:root {
+  --tb-bg:               #ffffff;   /* titlebar / sidebar / content background */
+  --border:              #f0f0f0;   /* all dividing lines */
+  --accent:              #1677ff;   /* primary blue */
+  --accent-hover:        #4096ff;
+  --text-primary:        rgba(0, 0, 0, 0.88);
+  --text-secondary:      #8c8c8c;
+  --selected-bg:         #e6f4ff;   /* selected device row */
+  --wc-hover:            rgba(0, 0, 0, 0.06); /* min/max button hover */
+  --wc-close-hover:      #e81123;   /* close button hover — Windows standard */
+  --wc-close-hover-text: #ffffff;
+}
+
 html, body {
   margin: 0;
   padding: 0;

@@ -5,7 +5,7 @@ import {
   ApiOutlined,
 } from "@ant-design/icons";
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 
 interface DeviceTypeCard {
   icon: React.ReactNode;
@@ -20,8 +20,8 @@ function DeviceCard({ icon, label, features }: DeviceTypeCard) {
         background: "#f5f5f5",
         borderRadius: 8,
         padding: "16px 20px",
-        minWidth: 160,
-        flex: 1,
+        flex: "1 1 0",
+        minWidth: 0,
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
@@ -47,46 +47,49 @@ export function WelcomePage() {
         flexDirection: "column",
         justifyContent: "center",
         alignItems: "center",
-        gap: 0,
-        padding: "0 32px 48px",
+        paddingBottom: 48,
       }}
     >
-      {/* Icon + Title */}
-      <img
-        src="/icon.png"
-        alt="Bridge"
-        style={{ width: 96, height: 96, marginBottom: 16, borderRadius: 16 }}
-      />
-      <Title level={2} style={{ margin: "0 0 6px" }}>
-        Bridge
-      </Title>
-      <Text type="secondary" style={{ fontSize: 14, marginBottom: 36 }}>
-        Device Debugging Toolkit
-      </Text>
+      <div
+        style={{
+          width: 560,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+        }}
+      >
+        <img
+          src="/icon.png"
+          alt="Bridge"
+          style={{ width: 96, height: 96, marginBottom: 16, borderRadius: 16 }}
+        />
+        <Text type="secondary" style={{ fontSize: 14, marginBottom: 36 }}>
+          Device Debugging Toolkit
+        </Text>
 
-      {/* Device type cards */}
-      <div style={{ display: "flex", gap: 12, width: "100%", maxWidth: 620, marginBottom: 32 }}>
-        <DeviceCard
-          icon={<UsbOutlined />}
-          label="ADB (Android)"
-          features={["Shell", "Logcat", "File Manager", "App Manager"]}
-        />
-        <DeviceCard
-          icon={<MobileOutlined />}
-          label="OHOS"
-          features={["Shell", "HiLog", "File Manager", "App Manager"]}
-        />
-        <DeviceCard
-          icon={<ApiOutlined />}
-          label="Serial / Telnet"
-          features={["Shell"]}
-        />
+        {/* Device type cards — width is now always exactly the inner div's width */}
+        <div style={{ display: "flex", gap: 12, width: "100%", marginBottom: 32 }}>
+          <DeviceCard
+            icon={<UsbOutlined />}
+            label="ADB Devices"
+            features={["Shell", "Logcat", "File Manager", "App Manager"]}
+          />
+          <DeviceCard
+            icon={<MobileOutlined />}
+            label="OHOS Devices"
+            features={["Shell", "HiLog", "File Manager", "App Manager"]}
+          />
+          <DeviceCard
+            icon={<ApiOutlined />}
+            label="Serial / Telnet"
+            features={["Shell"]}
+          />
+        </div>
+
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          Click&nbsp;<Text strong style={{ fontSize: 12 }}>+</Text>&nbsp;in the sidebar to connect a device.
+        </Text>
       </div>
-
-      {/* Hint */}
-      <Text type="secondary" style={{ fontSize: 12 }}>
-        Click&nbsp;<Text strong style={{ fontSize: 12 }}>+</Text>&nbsp;in the sidebar to connect a device.
-      </Text>
     </div>
   );
 }

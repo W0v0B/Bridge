@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { ConfigProvider, Layout, Tabs, theme } from "antd";
 import { Sidebar } from "./components/layout/Sidebar";
-import { Toolbar } from "./components/layout/Toolbar";
+import { TitleBar } from "./components/layout/TitleBar";
 import { StatusBar } from "./components/layout/StatusBar";
 import { ConnectModal } from "./components/layout/ConnectModal";
 import { WelcomePage } from "./components/layout/WelcomePage";
@@ -58,12 +58,13 @@ function App() {
         token: { colorBgContainer: "#fff", borderRadius: 6 },
       }}
     >
-      <Layout style={{ height: "100vh", overflow: "hidden" }}>
+      <div style={{ height: "100vh", overflow: "hidden", display: "flex", flexDirection: "column" }}>
+        <TitleBar />
+        <Layout style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
         <Sider width={200} style={{ background: "#fff" }}>
           <Sidebar onConnect={() => setConnectModalOpen(true)} />
         </Sider>
         <Layout style={{ minHeight: 0 }}>
-          <Toolbar />
           <Content
             style={{
               overflow: "hidden",
@@ -80,7 +81,7 @@ function App() {
               All three tab containers are always mounted once their device type has
               appeared. CSS display:none hides the inactive ones without unmounting,
               preserving all panel state across device-type switches.
-              destroyInactiveTabPane={false} keeps individual tab panels alive.
+              destroyOnHidden={false} keeps individual tab panels alive.
             */}
             <div
               style={{
@@ -93,7 +94,7 @@ function App() {
             >
               <Tabs
                 items={adbTabs}
-                destroyInactiveTabPane={false}
+                destroyOnHidden={false}
                 style={{ flex: 1 }}
                 tabBarStyle={{ marginBottom: 12 }}
               />
@@ -110,7 +111,7 @@ function App() {
             >
               <Tabs
                 items={serialTabs}
-                destroyInactiveTabPane={false}
+                destroyOnHidden={false}
                 style={{ flex: 1 }}
                 tabBarStyle={{ marginBottom: 12 }}
               />
@@ -127,7 +128,7 @@ function App() {
             >
               <Tabs
                 items={ohosTabs}
-                destroyInactiveTabPane={false}
+                destroyOnHidden={false}
                 style={{ flex: 1 }}
                 tabBarStyle={{ marginBottom: 12 }}
               />
@@ -136,7 +137,8 @@ function App() {
           <TransferQueue />
           <StatusBar />
         </Layout>
-      </Layout>
+        </Layout>
+      </div>
       <ConnectModal
         open={connectModalOpen}
         onClose={() => setConnectModalOpen(false)}
