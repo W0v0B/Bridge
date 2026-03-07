@@ -8,7 +8,9 @@ import {
   Select,
   Button,
   message,
+  Tooltip,
 } from "antd";
+import { ReloadOutlined } from "@ant-design/icons";
 import { connectNetworkDevice, getDevices } from "../../utils/adb";
 import { listPorts, openPort } from "../../utils/serial";
 import { useDeviceStore } from "../../store/deviceStore";
@@ -21,6 +23,7 @@ interface ConnectModalProps {
 export function ConnectModal({ open, onClose }: ConnectModalProps) {
   const [mode, setMode] = useState<"ADB" | "Serial">("ADB");
   const [loading, setLoading] = useState(false);
+  const [portsLoading, setPortsLoading] = useState(false);
 
   // ADB fields
   const [host, setHost] = useState("192.168.1.100");
@@ -36,15 +39,20 @@ export function ConnectModal({ open, onClose }: ConnectModalProps) {
   const addDevice = useDeviceStore((s) => s.addDevice);
   const syncAdbDevices = useDeviceStore((s) => s.syncAdbDevices);
 
-  const handleOpen = async () => {
-    if (mode === "Serial") {
-      try {
-        const available = await listPorts();
-        setPorts(available);
-      } catch {
-        // ignore
-      }
+  const fetchPorts = async () => {
+    setPortsLoading(true);
+    try {
+      const available = await listPorts();
+      setPorts(available);
+    } catch {
+      // ignore
+    } finally {
+      setPortsLoading(false);
     }
+  };
+
+  const handleOpen = async () => {
+    if (mode === "Serial") fetchPorts();
   };
 
   const handleAdbConnect = async () => {
@@ -114,7 +122,11 @@ export function ConnectModal({ open, onClose }: ConnectModalProps) {
       <Segmented
         options={["ADB", "Serial"]}
         value={mode}
-        onChange={(v) => setMode(v as "ADB" | "Serial")}
+        onChange={(v) => {
+          const next = v as "ADB" | "Serial";
+          setMode(next);
+          if (next === "Serial") fetchPorts();
+        }}
         block
         style={{ marginBottom: 16 }}
       />
@@ -148,12 +160,23 @@ export function ConnectModal({ open, onClose }: ConnectModalProps) {
       ) : (
         <Form layout="vertical">
           <Form.Item label="Port">
-            <Select
-              value={selectedPort || undefined}
-              onChange={setSelectedPort}
-              placeholder="Select port"
-              options={ports.map((p) => ({ value: p, label: p }))}
-            />
+            <div style={{ display: "flex", gap: 8 }}>
+              <Select
+                value={selectedPort || undefined}
+                onChange={setSelectedPort}
+                placeholder="Select port"
+                options={ports.map((p) => ({ value: p, label: p }))}
+                loading={portsLoading}
+                style={{ flex: 1 }}
+              />
+              <Tooltip title="Refresh port list">
+                <Button
+                  icon={<ReloadOutlined />}
+                  onClick={fetchPorts}
+                  loading={portsLoading}
+                />
+              </Tooltip>
+            </div>
           </Form.Item>
           <Form.Item label="Baud Rate">
             <Select

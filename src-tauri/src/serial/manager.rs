@@ -21,7 +21,20 @@ pub struct SerialDataEvent {
 
 pub fn list_ports() -> Result<Vec<String>, String> {
     let ports = available_ports().map_err(|e| e.to_string())?;
-    Ok(ports.iter().map(|p| p.port_name.clone()).collect())
+    let mut names: Vec<String> = ports.iter().map(|p| p.port_name.clone()).collect();
+    // Sort numerically for COM ports (COM3 < COM10), lexically otherwise
+    names.sort_by(|a, b| {
+        let num = |s: &str| -> Option<u32> {
+            s.to_uppercase()
+                .strip_prefix("COM")
+                .and_then(|n| n.parse().ok())
+        };
+        match (num(a), num(b)) {
+            (Some(na), Some(nb)) => na.cmp(&nb),
+            _ => a.cmp(b),
+        }
+    });
+    Ok(names)
 }
 
 pub fn open_port(port_name: &str, baud_rate: u32, app: AppHandle) -> Result<(), String> {
