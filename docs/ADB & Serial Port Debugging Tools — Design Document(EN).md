@@ -1,7 +1,7 @@
 # ADB & Serial Debug Tool — Design Document
 
 > **Project Name**: DevBridge (tentative)
-> **Document Version**: v1.7
+> **Document Version**: v1.8
 > **Author**: Personal Project
 > **Tech Stack**: Tauri 2 + Rust + React + TypeScript
 > **Last Updated**: 2026-03
@@ -63,13 +63,14 @@ Build a Windows desktop debugging tool that unifies ADB device management and se
 
 | Feature | Description | Priority |
 |---------|-------------|----------|
-| Port Scan | Auto-scan and list available COM ports | P0 |
-| Serial Connect | Configure baud rate and connect via ConnectModal dialog | P0 |
+| Port Scan | Auto-scan and list available COM ports; COM ports sorted numerically (COM3 < COM10) | P0 |
+| Serial Connect | Configure baud rate and connect via ConnectModal dialog; port list refreshed on modal open and on tab switch | P0 |
 | Shell I/O | Real-time send/receive in unified Shell tab (plain text display) | P0 |
 | Quick Command Panel | Right-side panel for saving frequently used commands; click to send; supports add/delete; shared between ADB and serial | P0 |
+| Sequence Runner | Per-device loop runner in Quick Commands panel; cycles through commands with a configurable interval; independent per device; survives device switching | P1 |
+| Log Export | Snapshot export and continuous log-to-file toggle; both are per-device and independent | P1 |
 | ~~HEX display mode~~ | ~~Toggle between HEX / ASCII display~~ | ~~Deferred~~ |
 | ~~Send Settings~~ | ~~Configurable line ending, timed auto-send~~ | ~~Deferred~~ |
-| ~~Data Export~~ | ~~Export serial send/receive history~~ | ~~Deferred~~ |
 
 > **Design decision**: Serial uses the same Shell tab as ADB — no separate "Serial Terminal" tab. The Shell tab detects the selected device type and dispatches to the appropriate backend (ADB shell vs serial write). Line ending is hardcoded to `\r\n` for now; configurable suffix is deferred.
 
@@ -414,20 +415,47 @@ struct SerialDataEvent {
 
 > **Design decision**: Serial config is simplified to just `port_name` + `baud_rate`. Advanced settings (data bits, stop bits, parity, flow control) are deferred — the defaults (8N1, no flow control) cover the vast majority of use cases. The serial read loop uses a native `std::thread` (not tokio `spawn_blocking`) since `serialport` is a blocking API and this avoids tying up tokio worker threads.
 
-#### 4.2.2 Quick Command Panel
+#### 4.2.2 Quick Command Panel & Sequence Runner
 
 Quick commands are managed entirely on the frontend via Zustand store (`commandStore.ts`) and shared between ADB and serial devices. The panel appears as a resizable right pane inside the Shell tab.
 
 ```typescript
 interface QuickCommand {
-  id: string;           // uuid
-  label: string;        // Display label, e.g. "Reset"
-  command: string;      // Payload to send, e.g. "AT+RST"
+  id: string;            // uuid
+  label: string;         // Display label, e.g. "Reset"
+  command: string;       // Payload to send, e.g. "AT+RST"
+  sequenceOrder?: number; // undefined = excluded from sequence; 1,2,3… = run order
 }
 ```
 
 - **ADB devices**: quick command runs via `startShellStream()` — output streams in real-time via `shell_output` events; sets the shell running state so the Stop button appears
 - **Serial devices**: quick command sends via `writeToPort(command + "\r\n")` — response arrives asynchronously via `serial_data` events
+
+**Sequence Runner** — a Sequence Runner section below the command list allows looping through commands that have a `sequenceOrder` set:
+- Each device has **independent** sequence state stored in a per-device ref map in `QuickCommandsPanel`
+- The device targeted by the sequence is captured at start time, so switching the UI to another device does not interrupt the runner
+- A configurable interval (default 2 s, min 0.5 s) separates successive commands
+- Output from sequence commands is routed to the originating device's buffer via `onOutput(text, deviceId)`, not to the currently selected device
+- The running state indicator and Run/Stop button reflect the **currently selected** device's sequence state, enabling independent control of each device's runner
+
+#### 4.2.3 Shell Log Utilities
+
+File writes from the Shell tab go through Rust backend commands (not `tauri-plugin-fs`) to avoid frontend permission restrictions:
+
+```rust
+#[tauri::command]
+async fn write_text_file_to_path(path: String, content: String) -> Result<(), String>
+// Creates or truncates a file and writes the given content (used for snapshot export
+// and to initialise a new log-to-file session)
+
+#[tauri::command]
+async fn append_text_to_file(path: String, content: String) -> Result<(), String>
+// Opens the file in append mode and writes content (used for continuous log-to-file)
+```
+
+**Snapshot export**: saves the current output buffer to a user-chosen file via `save()` dialog + `write_text_file_to_path`.
+
+**Log-to-file**: per-device toggle; when active, every call to `writeToDeviceBuffer` appends incoming text to the device's log file — including data arriving from background devices while another is selected.
 
 ### 4.3 Unified Device Model
 
@@ -518,11 +546,11 @@ Stored via `tauri-plugin-store` at `%APPDATA%/DevBridge/config.json`.
 ```
 
 **Main area rendering logic** (`App.tsx`):
-- `selectedDevice === null` → renders `<WelcomePage />`
-- `selectedDevice.type === "adb"` → renders `<Tabs key="adb">` with Shell, Logcat, File Manager, Apps tabs
-- `selectedDevice.type === "serial"` → renders `<Tabs key="serial">` with Shell tab only
+- `selectedDevice === null` → renders `<WelcomePage />` only
+- Both the ADB tab container and the Serial tab container are **always mounted** once a device of that type has been connected. The inactive container is hidden with `display: none` — it is never unmounted.
+- `destroyInactiveTabPane={false}` on each `<Tabs>` keeps individual tab panels (Shell, Logcat, Files, Apps) alive when switching between tabs.
 
-The `key` prop on `<Tabs>` ensures AntD resets the active tab when switching between device types.
+This ensures all shell output buffers, logcat entries, and file listings are preserved across device-type switches without requiring a global store.
 
 ### 6.1.1 Welcome Page (`WelcomePage.tsx`)
 
@@ -588,12 +616,20 @@ Shown when no device is selected. Centered, scrollable layout with a max-width o
 - Quick Commands also trigger `startShellStream()` for ADB and correctly set the running state so the Stop button appears.
 
 **Header controls:**
+- **Export snapshot** (download icon): saves the current device's complete output buffer to a user-chosen `.txt` file.
+- **Log to file** (file-add icon, turns red when active): opens a save dialog and begins continuously appending all incoming data to the chosen file. The toggle is **per-device** and independent — logging on device A continues uninterrupted while device B is selected. Stops only when toggled off or the device is disconnected.
 - **Settings toggle** (gear icon): reveals an inline `Max lines` setting (default 5000, range 0–100000, 0 = unlimited). The output buffer is trimmed to this limit to prevent DOM lag from unbounded log accumulation.
 - **Clear button** (trash icon): clears the current device's output buffer immediately.
 
+**Per-device output management** (`ShellPanel`):
+- `outputMap`, `inputMap`, `runningMap`, and `logFileMap` are all `useRef<Record<string, …>>` maps keyed by device ID, accumulating state for **all** connected devices simultaneously.
+- A central `writeToDeviceBuffer(deviceId, text)` helper handles buffer accumulation, `requestAnimationFrame` flush scheduling, and log-to-file append in one place.
+- Output from Quick Command sequence runners is routed via `onOutput(text, deviceId)`, directing data to the originating device's buffer regardless of which device is currently displayed.
+
 **Performance optimizations:**
-- Backend reads stdout in 8KB chunks instead of line-by-line, naturally batching high-throughput output into fewer IPC events.
-- Frontend uses `requestAnimationFrame`-based render batching — multiple data events within a single frame are coalesced into one React state update (~60fps max).
+- ADB backend reads stdout in 8KB chunks; serial backend reads in 1024-byte chunks with a 100 ms timeout. Both naturally batch output into fewer IPC events.
+- Frontend uses `requestAnimationFrame`-based render batching (`scheduleFlush`) — multiple data events within a single frame are coalesced into one React state update (~60 fps max).
+- Non-selected devices never trigger a React re-render; data is accumulated silently until that device is selected.
 
 ### 6.3 Logcat Tab Layout
 
@@ -756,6 +792,9 @@ Bundle `adb.exe`, `AdbWinApi.dll`, and `AdbWinUsbApi.dll` inside the app's `reso
 - [x] Serial write wired to Shell tab input
 - [x] Quick command panel working for both ADB and serial
 - [x] Auto-disconnect detection (`serial_disconnected` event)
+- [x] COM port list sorted numerically (COM3 < COM10); port list refreshed on modal open
+- [x] Sequence Runner: per-device loop through ordered quick commands with configurable interval
+- [x] Shell log export (snapshot) and continuous log-to-file toggle (per-device, independent)
 - [ ] HEX / ASCII display mode toggle
 - [ ] Configurable line ending (`\r\n` / `\r` / `\n` / None)
 - [ ] Drag-and-drop reordering of quick commands
@@ -766,6 +805,9 @@ Bundle `adb.exe`, `AdbWinApi.dll`, and `AdbWinUsbApi.dll` inside the app's `reso
 - [x] App Manager tab: list packages (user + system), install APK, uninstall/disable
 - [x] Shell stderr forwarded to terminal output (command-not-found errors now visible)
 - [x] Context-adaptive main area: welcome page, ADB tabs, serial Shell-only tab
+- [x] Always-mounted tab containers (display:none) — shell/logcat state survives device-type switches
+- [x] Per-device output buffers and log-to-file state in ShellPanel (switching devices never loses data)
+- [x] File write/append via Rust backend commands (avoids tauri-plugin-fs scope restrictions)
 - [ ] Config persistence (tauri-plugin-store)
 - [ ] Bundle adb.exe into installer
 - [ ] Network ADB connection
@@ -832,7 +874,8 @@ DevBridge/
 │   │   └── useShellEvents.ts   # useShellOutput() + useShellExit() hooks for streaming shell
 │   ├── utils/
 │   │   ├── adb.ts              # invoke wrappers for ADB commands
-│   │   └── serial.ts           # invoke wrappers for serial commands
+│   │   ├── serial.ts           # invoke wrappers for serial commands
+│   │   └── fs.ts               # invoke wrappers for file write/append (backend-side, avoids plugin-fs scope limits)
 │   ├── types/
 │   │   ├── adb.ts              # AdbDevice interface
 │   │   └── device.ts           # ConnectedDevice interface

@@ -46,6 +46,9 @@ pub fn run() {
             open_serial_port,
             close_serial_port,
             write_serial,
+            // File utilities
+            write_text_file_to_path,
+            append_text_to_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -177,6 +180,24 @@ async fn clear_device_log(serial: String) -> Result<(), String> {
 #[tauri::command]
 async fn export_logs(logs: Vec<logcat::LogEntry>, path: String) -> Result<(), String> {
     logcat::export_logs(logs, path).await
+}
+
+// ── File Utilities ──
+
+#[tauri::command]
+async fn write_text_file_to_path(path: String, content: String) -> Result<(), String> {
+    std::fs::write(&path, content.as_bytes()).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn append_text_to_file(path: String, content: String) -> Result<(), String> {
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|e| e.to_string())?;
+    file.write_all(content.as_bytes()).map_err(|e| e.to_string())
 }
 
 // ── Serial Commands ──

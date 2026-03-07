@@ -14,8 +14,19 @@ import { writeToPort } from "../../utils/serial";
 const { Text } = Typography;
 
 interface QuickCommandsPanelProps {
-  onOutput?: (text: string) => void;
-  onStreamStart?: () => void;
+  onOutput?: (text: string, deviceId?: string) => void;
+  onStreamStart?: (deviceId?: string) => void;
+}
+
+type DeviceItem = ReturnType<typeof useDeviceStore.getState>["devices"][number];
+
+interface SeqEntry {
+  running: boolean;
+  interval: number;
+  currentLabel: string;
+  timeoutId?: ReturnType<typeof setTimeout>;
+  index: number;
+  device: DeviceItem | null;
 }
 
 export function QuickCommandsPanel({ onOutput, onStreamStart }: QuickCommandsPanelProps) {
@@ -28,15 +39,137 @@ export function QuickCommandsPanel({ onOutput, onStreamStart }: QuickCommandsPan
 
   const [newLabel, setNewLabel] = useState("");
   const [newCommand, setNewCommand] = useState("");
+
+  // Per-device sequence state (runs in background independent of selected device)
+  const seqMap = useRef<Map<string, SeqEntry>>(new Map());
+
+  // UI state reflects the currently selected device's sequence
   const [seqRunning, setSeqRunning] = useState(false);
   const [seqInterval, setSeqInterval] = useState(2);
   const [seqCurrentLabel, setSeqCurrentLabel] = useState("");
 
-  const seqTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
-  const seqIndexRef = useRef(0);
-  const seqRunningRef = useRef(false);
+  // Stable refs so the setTimeout callback always gets fresh values
+  const onOutputRef = useRef(onOutput);
+  onOutputRef.current = onOutput;
+  const onStreamStartRef = useRef(onStreamStart);
+  onStreamStartRef.current = onStreamStart;
+  const selectedDeviceIdRef = useRef(selectedDeviceId);
+  selectedDeviceIdRef.current = selectedDeviceId;
 
   const selectedDevice = devices.find((d) => d.id === selectedDeviceId);
+
+  const getEntry = (deviceId: string): SeqEntry => {
+    if (!seqMap.current.has(deviceId)) {
+      seqMap.current.set(deviceId, {
+        running: false, interval: 2, currentLabel: "", index: 0, device: null,
+      });
+    }
+    return seqMap.current.get(deviceId)!;
+  };
+
+  // Sync UI when selected device changes
+  useEffect(() => {
+    if (!selectedDeviceId) return;
+    const entry = getEntry(selectedDeviceId);
+    setSeqRunning(entry.running);
+    setSeqInterval(entry.interval);
+    setSeqCurrentLabel(entry.currentLabel);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedDeviceId]);
+
+  const stopSequenceForDevice = useCallback((deviceId: string) => {
+    const entry = getEntry(deviceId);
+    clearTimeout(entry.timeoutId);
+    entry.running = false;
+    entry.currentLabel = "";
+    entry.timeoutId = undefined;
+    if (deviceId === selectedDeviceIdRef.current) {
+      setSeqRunning(false);
+      setSeqCurrentLabel("");
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Stable ref to the step function — avoids stale closure inside setTimeout
+  const runNextStepRef = useRef<(deviceId: string) => void>(null!);
+  runNextStepRef.current = (deviceId: string) => {
+    const entry = getEntry(deviceId);
+    if (!entry.running) return;
+
+    const device = entry.device;
+    if (!device) { stopSequenceForDevice(deviceId); return; }
+
+    const seqCmds = useCommandStore.getState().commands
+      .filter((c) => c.sequenceOrder && c.sequenceOrder > 0)
+      .sort((a, b) => (a.sequenceOrder ?? 0) - (b.sequenceOrder ?? 0));
+
+    if (seqCmds.length === 0) { stopSequenceForDevice(deviceId); return; }
+
+    const cmd = seqCmds[entry.index % seqCmds.length];
+    entry.index++;
+    entry.currentLabel = cmd.label;
+
+    // Update label in UI only if this device is currently visible
+    if (deviceId === selectedDeviceIdRef.current) {
+      setSeqCurrentLabel(cmd.label);
+    }
+
+    // Send to the captured device, writing output to that device's buffer (not selected device's)
+    (async () => {
+      try {
+        if (device.type === "adb") {
+          onOutputRef.current?.(`$ ${cmd.command}\n`, device.id);
+          onStreamStartRef.current?.(device.id);
+          await startShellStream(device.serial, cmd.command);
+        } else {
+          onOutputRef.current?.(`> ${cmd.command}\n`, device.id);
+          await writeToPort(device.serial, cmd.command + "\r\n");
+        }
+      } catch (e) {
+        const prefix = device.type === "adb" ? "$" : ">";
+        onOutputRef.current?.(`${prefix} ${cmd.command}\nError: ${e}\n`, device.id);
+      }
+    })();
+
+    entry.timeoutId = setTimeout(
+      () => runNextStepRef.current(deviceId),
+      entry.interval * 1000,
+    );
+  };
+
+  const stopSequence = useCallback(() => {
+    if (selectedDeviceId) stopSequenceForDevice(selectedDeviceId);
+  }, [selectedDeviceId, stopSequenceForDevice]);
+
+  const startSequence = useCallback(() => {
+    if (!selectedDevice || !selectedDeviceId) {
+      message.warning("No device selected");
+      return;
+    }
+    const seqCmds = commands.filter((c) => c.sequenceOrder && c.sequenceOrder > 0);
+    if (seqCmds.length === 0) {
+      message.warning("No commands have a sequence order set");
+      return;
+    }
+    const entry = getEntry(selectedDeviceId);
+    clearTimeout(entry.timeoutId);
+    entry.device = selectedDevice;
+    entry.index = 0;
+    entry.running = true;
+    entry.currentLabel = "";
+    setSeqRunning(true);
+    setSeqCurrentLabel("");
+    runNextStepRef.current(selectedDeviceId);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedDevice, selectedDeviceId, commands]);
+
+  const handleIntervalChange = (v: number | null) => {
+    const val = v ?? 2;
+    setSeqInterval(val);
+    if (selectedDeviceId) {
+      getEntry(selectedDeviceId).interval = val;
+    }
+  };
 
   const handleSend = useCallback(async (command: string) => {
     if (!selectedDevice) {
@@ -57,44 +190,6 @@ export function QuickCommandsPanel({ onOutput, onStreamStart }: QuickCommandsPan
       onOutput?.(`${prefix} ${command}\nError: ${e}\n`);
     }
   }, [selectedDevice, onOutput, onStreamStart]);
-
-  const stopSequence = useCallback(() => {
-    seqRunningRef.current = false;
-    clearTimeout(seqTimeoutRef.current);
-    setSeqRunning(false);
-    setSeqCurrentLabel("");
-  }, []);
-
-  // Stop sequence when device changes
-  useEffect(() => { stopSequence(); }, [selectedDeviceId, stopSequence]);
-
-  const runNextStep = useCallback(() => {
-    if (!seqRunningRef.current) return;
-    const seqCmds = useCommandStore
-      .getState()
-      .commands.filter((c) => c.sequenceOrder && c.sequenceOrder > 0)
-      .sort((a, b) => (a.sequenceOrder ?? 0) - (b.sequenceOrder ?? 0));
-
-    if (seqCmds.length === 0) { stopSequence(); return; }
-
-    const cmd = seqCmds[seqIndexRef.current % seqCmds.length];
-    seqIndexRef.current++;
-    setSeqCurrentLabel(cmd.label);
-    handleSend(cmd.command);
-    seqTimeoutRef.current = setTimeout(runNextStep, seqInterval * 1000);
-  }, [handleSend, seqInterval, stopSequence]);
-
-  const startSequence = useCallback(() => {
-    const seqCmds = commands.filter((c) => c.sequenceOrder && c.sequenceOrder > 0);
-    if (seqCmds.length === 0) {
-      message.warning("No commands have a sequence order set");
-      return;
-    }
-    seqIndexRef.current = 0;
-    seqRunningRef.current = true;
-    setSeqRunning(true);
-    runNextStep();
-  }, [commands, runNextStep]);
 
   const handleAdd = () => {
     const label = newLabel.trim();
@@ -164,7 +259,7 @@ export function QuickCommandsPanel({ onOutput, onStreamStart }: QuickCommandsPan
               max={3600}
               step={0.5}
               value={seqInterval}
-              onChange={(v) => setSeqInterval(v ?? 2)}
+              onChange={handleIntervalChange}
               disabled={seqRunning}
               style={{ width: 64 }}
             />

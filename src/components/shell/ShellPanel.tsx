@@ -5,7 +5,7 @@ import {
   DownloadOutlined, FileAddOutlined,
 } from "@ant-design/icons";
 import { save } from "@tauri-apps/plugin-dialog";
-import { writeTextFile } from "@tauri-apps/plugin-fs";
+import { writeTextFileTo, appendTextToFile } from "../../utils/fs";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { useDeviceStore } from "../../store/deviceStore";
 import { useConfigStore } from "../../store/configStore";
@@ -27,12 +27,14 @@ export function ShellPanel() {
   const outputMap = useRef<Record<string, string>>({});
   const inputMap = useRef<Record<string, string>>({});
   const runningMap = useRef<Record<string, boolean>>({});
+  // Per-device log-to-file paths (null = not logging)
+  const logFileMap = useRef<Record<string, string | null>>({});
+
   const [output, setOutput] = useState("");
   const [input, setInput] = useState("");
   const [running, setRunning] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [logToFile, setLogToFile] = useState(false);
-  const logFilePathRef = useRef<string | null>(null);
 
   const outputRef = useRef<HTMLDivElement>(null);
   const rafId = useRef<number>(0);
@@ -43,8 +45,7 @@ export function ShellPanel() {
   /** Keep only the last N lines of a string buffer. */
   const trimToMaxLines = useCallback((text: string): string => {
     const max = maxLinesRef.current;
-    if (max <= 0) return text; // 0 = unlimited
-    // Fast path: count newlines from the end
+    if (max <= 0) return text;
     let count = 0;
     let idx = text.length;
     while (idx > 0 && count < max) {
@@ -55,15 +56,14 @@ export function ShellPanel() {
     return idx > 0 ? text.slice(idx + 1) : text;
   }, []);
 
-  // Sync per-device state when switching devices; stop log-to-file
+  // Sync per-device UI state when switching devices
   useEffect(() => {
     if (selectedDeviceId) {
       setOutput(outputMap.current[selectedDeviceId] ?? "");
       setInput(inputMap.current[selectedDeviceId] ?? "");
       setRunning(runningMap.current[selectedDeviceId] ?? false);
+      setLogToFile(!!logFileMap.current[selectedDeviceId]);
     }
-    logFilePathRef.current = null;
-    setLogToFile(false);
   }, [selectedDeviceId]);
 
   useEffect(() => {
@@ -88,41 +88,48 @@ export function ShellPanel() {
     return () => cancelAnimationFrame(rafId.current);
   }, []);
 
-  const appendOutput = useCallback((text: string) => {
-    if (!selectedDeviceId) return;
-    outputMap.current[selectedDeviceId] = trimToMaxLines(
-      (outputMap.current[selectedDeviceId] ?? "") + text
+  /**
+   * Central write helper — accumulates text into the device's output buffer,
+   * flushes to UI if the device is currently visible, and appends to the
+   * per-device log file if one is active.
+   */
+  const writeToDeviceBuffer = useCallback((deviceId: string, text: string) => {
+    outputMap.current[deviceId] = trimToMaxLines(
+      (outputMap.current[deviceId] ?? "") + text
     );
-    scheduleFlush();
-    if (logFilePathRef.current) {
-      writeTextFile(logFilePathRef.current, text, { append: true }).catch(() => {});
+    if (deviceId === selectedDeviceId) {
+      scheduleFlush();
+    }
+    const logPath = logFileMap.current[deviceId];
+    if (logPath) {
+      appendTextToFile(logPath, text).catch(() => {});
     }
   }, [selectedDeviceId, scheduleFlush, trimToMaxLines]);
 
+  // appendOutput is called by QuickCommandsPanel with an optional target deviceId
+  const appendOutput = useCallback((text: string, deviceId?: string) => {
+    const targetId = deviceId ?? selectedDeviceId;
+    if (!targetId) return;
+    writeToDeviceBuffer(targetId, text);
+  }, [selectedDeviceId, writeToDeviceBuffer]);
+
   const setDeviceRunning = useCallback((deviceId: string, value: boolean) => {
     runningMap.current[deviceId] = value;
-    // Only update visible state if this device is currently selected
     if (deviceId === selectedDeviceId) {
       setRunning(value);
     }
   }, [selectedDeviceId]);
 
-  // Subscribe to incoming serial data — accumulate for all open ports, not just selected
+  // Subscribe to incoming serial data — accumulate for all open ports
   const handleSerialData = useCallback(
     (event: { port: string; data: string }) => {
       const device = devices.find(
         (d) => d.type === "serial" && d.serial === event.port
       );
       if (!device) return;
-      outputMap.current[device.id] = trimToMaxLines(
-        (outputMap.current[device.id] ?? "") + event.data
-      );
-      // Only re-render if this port is currently visible
-      if (device.id === selectedDeviceId) {
-        scheduleFlush();
-      }
+      writeToDeviceBuffer(device.id, event.data);
     },
-    [devices, selectedDeviceId, scheduleFlush, trimToMaxLines]
+    [devices, writeToDeviceBuffer]
   );
   useSerialData(handleSerialData);
 
@@ -130,21 +137,13 @@ export function ShellPanel() {
   useShellOutput(
     useCallback(
       (event) => {
-        // Find the device by serial to get the correct outputMap key
         const device = devices.find(
           (d) => d.type === "adb" && d.serial === event.serial
         );
         if (!device) return;
-        const key = device.id;
-        outputMap.current[key] = trimToMaxLines(
-          (outputMap.current[key] ?? "") + event.data
-        );
-        // Only schedule render if this device is selected
-        if (key === selectedDeviceId) {
-          scheduleFlush();
-        }
+        writeToDeviceBuffer(device.id, event.data);
       },
-      [devices, selectedDeviceId, scheduleFlush, trimToMaxLines]
+      [devices, writeToDeviceBuffer]
     )
   );
 
@@ -155,15 +154,11 @@ export function ShellPanel() {
           (d) => d.type === "adb" && d.serial === event.serial
         );
         if (!device) return;
-        const key = device.id;
         const exitLine = `\n[Process exited with code ${event.code}]\n`;
-        outputMap.current[key] = (outputMap.current[key] ?? "") + exitLine;
-        setDeviceRunning(key, false);
-        if (key === selectedDeviceId) {
-          scheduleFlush();
-        }
+        writeToDeviceBuffer(device.id, exitLine);
+        setDeviceRunning(device.id, false);
       },
-      [devices, selectedDeviceId, scheduleFlush, setDeviceRunning]
+      [devices, writeToDeviceBuffer, setDeviceRunning]
     )
   );
 
@@ -219,7 +214,7 @@ export function ShellPanel() {
     const path = await save({ defaultPath: makeLogFilename(), filters: [{ name: "Text", extensions: ["txt"] }] });
     if (!path) return;
     try {
-      await writeTextFile(path, content);
+      await writeTextFileTo(path, content);
       message.success("Log exported");
     } catch (e) {
       message.error(String(e));
@@ -227,16 +222,17 @@ export function ShellPanel() {
   };
 
   const handleToggleLogToFile = async () => {
+    if (!selectedDeviceId) return;
     if (logToFile) {
-      logFilePathRef.current = null;
+      logFileMap.current[selectedDeviceId] = null;
       setLogToFile(false);
       return;
     }
     const path = await save({ defaultPath: makeLogFilename(), filters: [{ name: "Text", extensions: ["txt"] }] });
     if (!path) return;
     try {
-      await writeTextFile(path, ""); // create/truncate the file
-      logFilePathRef.current = path;
+      await writeTextFileTo(path, ""); // create/truncate the file
+      logFileMap.current[selectedDeviceId] = path;
       setLogToFile(true);
       message.success("Logging to file started");
     } catch (e) {
@@ -433,8 +429,9 @@ export function ShellPanel() {
       <Panel defaultSize={30} minSize={20}>
         <QuickCommandsPanel
           onOutput={appendOutput}
-          onStreamStart={() => {
-            if (selectedDevice) setDeviceRunning(selectedDevice.id, true);
+          onStreamStart={(deviceId) => {
+            const id = deviceId ?? selectedDevice?.id;
+            if (id) setDeviceRunning(id, true);
           }}
         />
       </Panel>
