@@ -98,16 +98,6 @@ pub async fn run_shell(serial: &str, command: &str) -> Result<String, String> {
     run_adb(&["-s", serial, "shell", command]).await
 }
 
-/// Reboot the device. `mode` can be None (normal), "bootloader", or "recovery".
-pub async fn reboot(serial: &str, mode: Option<&str>) -> Result<(), String> {
-    let mut args = vec!["-s", serial, "reboot"];
-    if let Some(m) = mode {
-        args.push(m);
-    }
-    run_adb(&args).await?;
-    Ok(())
-}
-
 /// Install an APK on the device.
 pub async fn install_apk(serial: &str, apk_path: &str) -> Result<(), String> {
     run_adb(&["-s", serial, "install", "-r", apk_path]).await?;
