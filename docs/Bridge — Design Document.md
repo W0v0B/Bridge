@@ -548,11 +548,11 @@ Stored via `tauri-plugin-store` at `%APPDATA%/Bridge/config.json`.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│ [▪] Bridge   ············drag············  [Refresh] [–] [□] [✕]│  TitleBar (36px, frameless)
+│ [▪] Bridge   ················drag region·····················  [–] [□] [✕]│  TitleBar (36px, frameless)
 ├──────────────────┬──────────────────────────────────────────────┤
 │                  │  (main area — content depends on selection)  │
 │  Left Sidebar    │ ──────────────────────────────────────────── │
-│                  │                                              │
+│  [↺] [+]         │                                              │
 │  Unified Device  │   No device selected  →  Welcome Page        │
 │  List            │   ADB device selected →  Shell / Logcat /    │
 │  ┌────────────┐  │                          File Manager / Apps  │
@@ -562,16 +562,18 @@ Stored via `tauri-plugin-store` at `%APPDATA%/Bridge/config.json`.
 │  │ ○ COM7     │  │                                              │
 │  └────────────┘  │                                              │
 │                  │                                              │
-│  [+ Connect]     │                                              │
+│  [⚙ Settings]    │                                              │
 ├──────────────────┴──────────────────────────────────────────────┤
-│  Status Bar: Device Count | Connection Status                    │
+│  Status Bar: Device Count | Connection Status  Active: <name>   │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
 The window uses **`decorations: false`** (frameless) with `shadow: true`. The custom `TitleBar` component spans the full window width and provides:
 - Left: 16 px app icon + "Bridge" text
-- Centre: `data-tauri-drag-region` spacer + Refresh button + active device name
+- Centre: `data-tauri-drag-region` spacer (fully draggable — no interactive elements)
 - Right: standard window controls (minimise / maximise-restore / close) with Windows-convention hover colours
+
+The active device name (with model) is shown in the **StatusBar** bottom-right instead of the titlebar, keeping the drag region unobstructed.
 
 **Main area rendering logic** (`App.tsx`):
 - `selectedDevice === null` → renders `<WelcomePage />` only
@@ -827,6 +829,10 @@ Bundle `adb.exe`, `AdbWinApi.dll`, and `AdbWinUsbApi.dll` inside the app's `reso
 - [x] Always-mounted tab containers (display:none) — shell/logcat state survives device-type switches
 - [x] Per-device output buffers and log-to-file state in ShellPanel (switching devices never loses data)
 - [x] File write/append via Rust backend commands (avoids tauri-plugin-fs scope restrictions)
+- [x] 6-theme system (Snow, Dark Modern, Rose, Arctic, Violet, Nord) with Settings drawer and live theme switching
+- [x] All UI colors driven by CSS custom properties — cards, logs, file rows, terminal, modals, scrollbars
+- [x] Refresh button moved to sidebar (always visible); titlebar centre is a pure drag region
+- [x] Active device name + model shown in StatusBar bottom-right
 - [ ] Config persistence (tauri-plugin-store)
 - [ ] Bundle adb.exe into installer
 - [ ] Network ADB connection
@@ -869,7 +875,7 @@ Bridge/
 │   ├── components/
 │   │   ├── layout/
 │   │   │   ├── Sidebar.tsx     # Left sidebar: unified device list (ADB + serial)
-│   │   │   ├── TitleBar.tsx    # Frameless custom titlebar: drag region, Refresh, window controls
+│   │   │   ├── TitleBar.tsx    # Frameless custom titlebar: full drag region, window controls
 │   │   │   ├── StatusBar.tsx   # Bottom status bar
 │   │   │   ├── ConnectModal.tsx # Dialog for serial/network ADB connection
 │   │   │   └── WelcomePage.tsx  # Welcome screen (shown when no device is selected)

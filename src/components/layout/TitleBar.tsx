@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { Typography } from "antd";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { useDeviceStore } from "../../store/deviceStore";
 
 const { Text } = Typography;
 const appWindow = getCurrentWindow();
@@ -84,10 +83,6 @@ function WinBtn({ icon, onClick, isClose, title }: WinBtnProps) {
 export function TitleBar() {
   const [isMaximized, setIsMaximized] = useState(false);
 
-  const selectedDeviceId = useDeviceStore((s) => s.selectedDeviceId);
-  const devices = useDeviceStore((s) => s.devices);
-  const selectedDevice = devices.find((d) => d.id === selectedDeviceId);
-
   useEffect(() => {
     appWindow.isMaximized().then(setIsMaximized);
     let unlisten: (() => void) | undefined;
@@ -141,19 +136,6 @@ export function TitleBar() {
 
       {/* Centre: flex spacer (draggable) */}
       <div data-tauri-drag-region style={{ flex: 1 }} />
-
-      {/* Centre-right: active device name */}
-      {selectedDevice && (
-        <div
-          onMouseDown={(e) => e.stopPropagation()}
-          style={{ paddingRight: 8 }}
-        >
-          <Text type="secondary" style={{ fontSize: 13 }}>
-            {selectedDevice.name}
-            {selectedDevice.model ? ` (${selectedDevice.model})` : ""}
-          </Text>
-        </div>
-      )}
 
       {/* Right: window controls */}
       <div

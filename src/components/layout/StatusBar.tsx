@@ -35,7 +35,7 @@ export function StatusBar() {
       </span>
       {selectedDevice && (
         <span style={{ marginLeft: "auto", color: "var(--text-secondary)", fontSize: 12 }}>
-          Active: {selectedDevice.name}
+          Active: {selectedDevice.name}{selectedDevice.model ? ` (${selectedDevice.model})` : ""}
         </span>
       )}
     </Footer>
