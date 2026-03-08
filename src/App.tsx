@@ -20,6 +20,7 @@ import { useSerialDisconnect } from "./hooks/useSerialEvents";
 import { useDeviceStore } from "./store/deviceStore";
 import { useConfigStore } from "./store/configStore";
 import { THEMES } from "./theme";
+import { getDevices } from "./utils/adb";
 
 const { Content, Sider } = Layout;
 
@@ -50,6 +51,11 @@ function App() {
 
   const [connectModalOpen, setConnectModalOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+
+  const syncAdbDevices = useDeviceStore((s) => s.syncAdbDevices);
+  const handleRefresh = async () => {
+    try { syncAdbDevices(await getDevices()); } catch { /* ignore */ }
+  };
 
   const selectedDeviceId = useDeviceStore((s) => s.selectedDeviceId);
   const devices = useDeviceStore((s) => s.devices);
@@ -91,6 +97,7 @@ function App() {
           <Sider width={200} style={{ background: "var(--sidebar-bg)", borderRight: "1px solid var(--border)" }}>
             <Sidebar
               onConnect={() => setConnectModalOpen(true)}
+              onRefresh={handleRefresh}
               onSettings={() => setSettingsOpen(true)}
             />
           </Sider>

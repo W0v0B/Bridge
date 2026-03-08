@@ -1,6 +1,7 @@
 import { Button, Tooltip, Typography } from "antd";
 import {
   PlusOutlined,
+  ReloadOutlined,
   SettingOutlined,
   UsbOutlined,
   ApiOutlined,
@@ -24,10 +25,11 @@ const stateColors: Record<string, string> = {
 
 interface SidebarProps {
   onConnect: () => void;
+  onRefresh: () => void;
   onSettings: () => void;
 }
 
-export function Sidebar({ onConnect, onSettings }: SidebarProps) {
+export function Sidebar({ onConnect, onRefresh, onSettings }: SidebarProps) {
   const devices = useDeviceStore((s) => s.devices);
   const selectedDeviceId = useDeviceStore((s) => s.selectedDeviceId);
   const selectDevice = useDeviceStore((s) => s.selectDevice);
@@ -167,14 +169,23 @@ export function Sidebar({ onConnect, onSettings }: SidebarProps) {
         <Text strong style={{ fontSize: 16 }}>
           Bridge
         </Text>
-        <Tooltip title="Connect device">
-          <Button
-            type="primary"
-            size="small"
-            icon={<PlusOutlined />}
-            onClick={onConnect}
-          />
-        </Tooltip>
+        <div style={{ display: "flex", gap: 6 }}>
+          <Tooltip title="Refresh devices">
+            <Button
+              size="small"
+              icon={<ReloadOutlined />}
+              onClick={onRefresh}
+            />
+          </Tooltip>
+          <Tooltip title="Connect device">
+            <Button
+              type="primary"
+              size="small"
+              icon={<PlusOutlined />}
+              onClick={onConnect}
+            />
+          </Tooltip>
+        </div>
       </div>
 
       {/* Device groups */}

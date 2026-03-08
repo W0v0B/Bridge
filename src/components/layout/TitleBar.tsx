@@ -1,9 +1,7 @@
 import { useEffect, useState } from "react";
-import { Button, Typography } from "antd";
-import { ReloadOutlined } from "@ant-design/icons";
+import { Typography } from "antd";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useDeviceStore } from "../../store/deviceStore";
-import { getDevices } from "../../utils/adb";
 
 const { Text } = Typography;
 const appWindow = getCurrentWindow();
@@ -86,7 +84,6 @@ function WinBtn({ icon, onClick, isClose, title }: WinBtnProps) {
 export function TitleBar() {
   const [isMaximized, setIsMaximized] = useState(false);
 
-  const syncAdbDevices = useDeviceStore((s) => s.syncAdbDevices);
   const selectedDeviceId = useDeviceStore((s) => s.selectedDeviceId);
   const devices = useDeviceStore((s) => s.devices);
   const selectedDevice = devices.find((d) => d.id === selectedDeviceId);
@@ -101,15 +98,6 @@ export function TitleBar() {
     });
     return () => unlisten?.();
   }, []);
-
-  const handleRefresh = async () => {
-    try {
-      const devs = await getDevices();
-      syncAdbDevices(devs);
-    } catch {
-      // ignore
-    }
-  };
 
   const handleMaximize = async () => {
     await appWindow.toggleMaximize();
@@ -154,24 +142,12 @@ export function TitleBar() {
       {/* Centre: flex spacer (draggable) */}
       <div data-tauri-drag-region style={{ flex: 1 }} />
 
-      {/* Centre-right: toolbar actions */}
+      {/* Centre-right: active device name */}
       {selectedDevice && (
         <div
           onMouseDown={(e) => e.stopPropagation()}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            paddingRight: 8,
-          }}
+          style={{ paddingRight: 8 }}
         >
-          <Button
-            size="small"
-            icon={<ReloadOutlined />}
-            onClick={handleRefresh}
-          >
-            Refresh
-          </Button>
           <Text type="secondary" style={{ fontSize: 13 }}>
             {selectedDevice.name}
             {selectedDevice.model ? ` (${selectedDevice.model})` : ""}
