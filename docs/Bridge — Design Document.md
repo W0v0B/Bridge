@@ -864,10 +864,11 @@ Bridge/
 │   │   │   ├── file.rs         # File manager commands (push/pull/delete)
 │   │   │   ├── logcat.rs       # Streaming logcat reader
 │   │   │   ├── apps.rs         # App manager: list packages, install/uninstall
-│   │   │   └── commands.rs     # Shell stream, reboot, install APK
+│   │   │   └── commands.rs     # Shell stream, install APK, adb_path() resolver
 │   │   ├── serial/
 │   │   │   ├── mod.rs
 │   │   │   └── manager.rs      # Port open/close/write, read loop thread, event emission
+│   │   ├── util.rs             # cmd() helper: wraps Command with CREATE_NO_WINDOW on Windows
 │   │   └── config.rs           # Config struct definitions
 │   ├── capabilities/           # Tauri capability permissions
 │   ├── resources/
