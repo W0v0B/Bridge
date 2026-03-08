@@ -95,10 +95,23 @@ pub async fn list_devices() -> Result<Vec<AdbDevice>, String> {
 }
 
 /// Connect to a network device via `adb connect host:port`.
+///
+/// `adb connect` returns exit code 0 even when the connection fails,
+/// putting "failed to connect" or "cannot connect" in stdout.  We check
+/// for these and convert them into `Err` so the frontend can show a
+/// proper error message instead of a green checkmark.
 pub async fn connect_network_device(host: &str, port: u16) -> Result<String, String> {
     use super::commands::run_adb;
     let addr = format!("{}:{}", host, port);
-    run_adb(&["connect", &addr]).await
+    let result = run_adb(&["connect", &addr]).await?;
+    let lower = result.to_lowercase();
+    if lower.contains("failed to connect")
+        || lower.contains("cannot connect")
+        || lower.contains("unable to connect")
+    {
+        return Err(result.trim().to_string());
+    }
+    Ok(result)
 }
 
 /// Disconnect a device via `adb disconnect serial`.
