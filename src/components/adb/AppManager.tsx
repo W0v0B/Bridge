@@ -21,6 +21,8 @@ import {
 } from "@ant-design/icons";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useDeviceStore } from "../../store/deviceStore";
+import { useConfigStore } from "../../store/configStore";
+import { THEMES } from "../../theme";
 import { listPackages, uninstallPackage, installApk, forceStopPackage, clearPackageData, reEnablePackage } from "../../utils/adb";
 import type { PackageInfo } from "../../types/adb";
 
@@ -28,6 +30,7 @@ type FilterMode = "all" | "user" | "system" | "product" | "vendor" | "hidden";
 
 export function AppManager() {
   const { message } = App.useApp();
+  const isDark = THEMES[useConfigStore((s) => s.config.theme)].isDark;
   const selectedDeviceId = useDeviceStore((s) => s.selectedDeviceId);
   const allDevices = useDeviceStore((s) => s.devices);
   const deviceObj = allDevices.find((d) => d.id === selectedDeviceId && d.type === "adb") ?? null;
@@ -209,17 +212,31 @@ export function AppManager() {
       key: "type",
       width: 130,
       render: (_: unknown, record: PackageInfo) => {
-        const tagProps: Record<string, { color: string }> = {
-          user:    { color: "blue" },
-          product: { color: "green" },
-          vendor:  { color: "purple" },
-          system:  { color: "orange" },
+        // Preset names produce fixed dark backgrounds in dark mode that clash
+        // with lighter containers (notably Nord). In dark themes, use card-bg
+        // with an explicit text/border colour instead.
+        const presetColors: Record<string, string> = {
+          user: "blue", product: "green", vendor: "purple", system: "orange",
         };
-        const { color } = tagProps[record.app_type] ?? { color: "default" };
+        const hexColors: Record<string, string> = {
+          user: "#4096ff", product: "#52c41a", vendor: "#9254de", system: "#fa8c16",
+        };
+        const typeTag = isDark ? (() => {
+          const hex = hexColors[record.app_type] ?? "#8c8c8c";
+          return (
+            <Tag style={{ color: hex, background: "var(--card-bg)", border: `1px solid ${hex}80` }}>
+              {record.app_type}
+            </Tag>
+          );
+        })() : <Tag color={presetColors[record.app_type] ?? "default"}>{record.app_type}</Tag>;
         return (
           <Space size={4}>
-            <Tag color={color}>{record.app_type}</Tag>
-            {record.is_hidden && <Tag color="red">hidden</Tag>}
+            {typeTag}
+            {record.is_hidden && (
+              isDark
+                ? <Tag style={{ color: "#ff4d4f", background: "var(--card-bg)", border: "1px solid #ff4d4f80" }}>hidden</Tag>
+                : <Tag color="red">hidden</Tag>
+            )}
             {record.is_disabled && <Tag color="default">disabled</Tag>}
           </Space>
         );
