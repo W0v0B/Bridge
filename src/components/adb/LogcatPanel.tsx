@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import {
+  App,
   Input,
   Select,
   Button,
@@ -7,7 +8,6 @@ import {
   Segmented,
   Tooltip,
   InputNumber,
-  message,
 } from "antd";
 import {
   PlayCircleOutlined,
@@ -61,6 +61,7 @@ interface ModeBuffer {
 }
 
 export function LogcatPanel() {
+  const { message } = App.useApp();
   const selectedDeviceId = useDeviceStore((s) => s.selectedDeviceId);
   const allDevices = useDeviceStore((s) => s.devices);
   const selectedDevice =

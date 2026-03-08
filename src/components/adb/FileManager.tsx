@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
-import { Table, Button, Space, Popconfirm, message, Typography, Tag, Tooltip, Input } from "antd";
+import { App, Table, Button, Space, Popconfirm, Typography, Tag, Tooltip, Input } from "antd";
 import {
   FolderOutlined,
   FileOutlined,
@@ -24,6 +24,7 @@ function humanSize(bytes: number): string {
 }
 
 export function FileManager() {
+  const { message } = App.useApp();
   const selectedDeviceId = useDeviceStore((s) => s.selectedDeviceId);
   const allDevices = useDeviceStore((s) => s.devices);
   const deviceObj = allDevices.find((d) => d.id === selectedDeviceId) ?? null;

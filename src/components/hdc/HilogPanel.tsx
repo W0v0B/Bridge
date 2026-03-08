@@ -1,12 +1,12 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import {
+  App,
   Input,
   Select,
   Button,
   Space,
   Tooltip,
   InputNumber,
-  message,
 } from "antd";
 import {
   PlayCircleOutlined,
@@ -43,6 +43,7 @@ function formatEntry(e: HilogEntry): string {
 }
 
 export function HilogPanel() {
+  const { message } = App.useApp();
   const selectedDeviceId = useDeviceStore((s) => s.selectedDeviceId);
   const allDevices = useDeviceStore((s) => s.devices);
   const selectedDevice =

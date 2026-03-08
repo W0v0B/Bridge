@@ -25,15 +25,26 @@ pub struct OhosDevice {
 static DEVICE_REMOUNT_STATUS: Lazy<Mutex<HashMap<String, (bool, String)>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
-/// Parse `hdc list targets -v` output.
+/// Parse `hdc list targets` (non-verbose) output into a set of real connect keys.
 ///
-/// Example:
+/// Returns only keys that HDC considers genuine devices — phantoms (UART ports,
+/// loopback listeners) are excluded by HDC itself.
+fn parse_real_keys(output: &str) -> HashSet<String> {
+    output
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty() && !l.starts_with('['))
+        .collect()
+}
+
+/// Parse `hdc list targets -v` output into a map of connect_key → metadata.
+///
+/// Example line:
+/// ```text
+/// 127.0.0.1:5557          TCP     Connected       localhost       hdc
 /// ```
-/// connect-key1            USB     Connected       localhost       hdc
-/// 127.0.0.1:5555          TCP     Offline         localhost       hdc
-/// ```
-fn parse_devices_output(output: &str) -> Vec<OhosDevice> {
-    let mut devices = Vec::new();
+fn parse_verbose_output(output: &str) -> HashMap<String, OhosDevice> {
+    let mut map = HashMap::new();
     for line in output.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('[') {
@@ -44,44 +55,65 @@ fn parse_devices_output(output: &str) -> Vec<OhosDevice> {
             continue;
         }
         let connect_key = parts[0].to_string();
-        let state = parts.get(2).unwrap_or(&"Unknown").to_string();
-
-        // HDC always emits a "127.0.0.1:5555 TCP Offline localhost" loopback
-        // entry for its local emulator listener even when no device is attached.
-        // Hide it unless it actually becomes Connected (real emulator).
-        if connect_key == "127.0.0.1:5555" && state.eq_ignore_ascii_case("offline") {
-            continue;
-        }
-
-        devices.push(OhosDevice {
-            connect_key,
-            conn_type: parts.get(1).unwrap_or(&"USB").to_string(),
-            state,
-            name: parts.get(3).unwrap_or(&"").to_string(),
-            is_remounted: false,
-            remount_info: String::new(),
-        });
+        map.insert(
+            connect_key.clone(),
+            OhosDevice {
+                connect_key,
+                conn_type: parts.get(1).unwrap_or(&"USB").to_string(),
+                state: parts.get(2).unwrap_or(&"Unknown").to_string(),
+                name: parts.get(3).unwrap_or(&"").to_string(),
+                is_remounted: false,
+                remount_info: String::new(),
+            },
+        );
     }
-    devices
+    map
 }
 
 /// List currently connected OHOS devices, merging in cached remount status.
+///
+/// Uses `hdc list targets` as the authoritative source of real devices and
+/// `hdc list targets -v` to enrich each entry with metadata (conn_type, state,
+/// name). This eliminates all phantom entries (UART/COM port scans, loopback
+/// listeners) without any special-case filters.
 pub async fn list_devices() -> Result<Vec<OhosDevice>, String> {
-    match run_hdc(&["list", "targets", "-v"]).await {
-        Ok(output) => {
-            let mut devices = parse_devices_output(&output);
-            if let Ok(status_map) = DEVICE_REMOUNT_STATUS.lock() {
-                for device in &mut devices {
-                    if let Some((is_remounted, info)) = status_map.get(&device.connect_key) {
-                        device.is_remounted = *is_remounted;
-                        device.remount_info = info.clone();
-                    }
-                }
+    let (brief, verbose) = tokio::try_join!(
+        run_hdc(&["list", "targets"]),
+        run_hdc(&["list", "targets", "-v"]),
+    )
+    .map_err(|e| e.to_string())?;
+
+    let real_keys = parse_real_keys(&brief);
+    let verbose_map = parse_verbose_output(&verbose);
+
+    let mut devices: Vec<OhosDevice> = real_keys
+        .iter()
+        .filter_map(|key| {
+            verbose_map.get(key).cloned().or_else(|| {
+                // Key appeared in non-verbose but not verbose (race); build minimal entry
+                Some(OhosDevice {
+                    connect_key: key.clone(),
+                    conn_type: if key.contains(':') { "TCP".into() } else { "USB".into() },
+                    state: "Connected".into(),
+                    name: String::new(),
+                    is_remounted: false,
+                    remount_info: String::new(),
+                })
+            })
+        })
+        .collect();
+
+    // Merge cached remount status
+    if let Ok(status_map) = DEVICE_REMOUNT_STATUS.lock() {
+        for device in &mut devices {
+            if let Some((is_remounted, info)) = status_map.get(&device.connect_key) {
+                device.is_remounted = *is_remounted;
+                device.remount_info = info.clone();
             }
-            Ok(devices)
         }
-        Err(_) => Ok(Vec::new()),
     }
+
+    Ok(devices)
 }
 
 /// Connect to an OHOS device over TCP: `hdc tconn <addr>`.
@@ -136,7 +168,7 @@ async fn attempt_remount(connect_key: String, app: AppHandle) {
     }
 }
 
-/// Start a background task that polls `hdc list targets -v` every 2 seconds,
+/// Start a background task that polls `hdc list targets` every 2 seconds,
 /// emits `hdc_devices_changed` when the list changes, and auto-attempts
 /// `hdc target mount` for newly connected devices.
 pub fn start_device_watcher(app: AppHandle) {

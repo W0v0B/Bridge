@@ -199,7 +199,7 @@ import { getOhosDevices } from "../utils/hdc";
 const devices = await getOhosDevices();
 ```
 
-**Returns**: Array of `OhosDevice`. Empty array if no devices are connected or if `hdc list targets -v` fails.
+**Returns**: Array of `OhosDevice`. Empty array if no devices are connected or if `hdc` fails. Internally runs both `hdc list targets` (authoritative device list) and `hdc list targets -v` (metadata) in parallel, cross-referencing to eliminate phantom entries (UART/COM port scans, loopback listeners).
 
 **Notes**: This is a one-shot read. For live updates, subscribe to [`hdc_devices_changed`](#hdc_devices_changed). Remount status is merged in from `DEVICE_REMOUNT_STATUS` before returning.
 
@@ -228,7 +228,7 @@ invoke("connect_ohos_device", { addr: string }): Promise<string>
 `start_device_watcher(app)` is started automatically on app launch (in `lib.rs::setup`). It is not a Tauri command.
 
 **Behaviour:**
-1. Polls `hdc list targets -v` every **2 seconds**.
+1. Polls `hdc list targets` + `hdc list targets -v` (in parallel) every **2 seconds**. Only devices present in the non-verbose output are kept; verbose output provides metadata (conn_type, state, name).
 2. When the device list changes, emits [`hdc_devices_changed`](#hdc_devices_changed).
 3. For each newly seen device with `state == "Connected"`, spawns `attempt_remount()` **once per connect_key per session** (tracked in a session-local `HashSet`).
 4. `attempt_remount()`:

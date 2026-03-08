@@ -20,8 +20,12 @@ export const useDeviceStore = create<DeviceState>((set) => ({
 
   addDevice: (device) =>
     set((state) => {
-      if (state.devices.some((d) => d.id === device.id)) return state;
-      return { devices: [...state.devices, device] };
+      const existing = state.devices.find((d) => d.id === device.id);
+      // Same id AND same type → truly duplicate, skip
+      if (existing && existing.type === device.type) return state;
+      // Same id but different type (e.g. OHOS phantom vs serial) → replace
+      const filtered = state.devices.filter((d) => d.id !== device.id);
+      return { devices: [...filtered, device] };
     }),
 
   removeDevice: (id) =>

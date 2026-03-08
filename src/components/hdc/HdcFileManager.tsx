@@ -1,10 +1,10 @@
 import { useEffect, useState, useCallback } from "react";
 import {
+  App,
   Table,
   Button,
   Space,
   Popconfirm,
-  message,
   Typography,
   Tooltip,
   Input,
@@ -41,6 +41,7 @@ function humanSize(bytes: number): string {
 }
 
 export function HdcFileManager() {
+  const { message } = App.useApp();
   const selectedDeviceId = useDeviceStore((s) => s.selectedDeviceId);
   const allDevices = useDeviceStore((s) => s.devices);
   const deviceObj = allDevices.find((d) => d.id === selectedDeviceId) ?? null;

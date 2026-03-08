@@ -1,10 +1,10 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
 import {
+  App,
   Table,
   Button,
   Space,
   Popconfirm,
-  message,
   Typography,
   Tag,
   Tooltip,
@@ -27,6 +27,7 @@ import type { PackageInfo } from "../../types/adb";
 type FilterMode = "all" | "user" | "system" | "product" | "vendor" | "hidden";
 
 export function AppManager() {
+  const { message } = App.useApp();
   const selectedDeviceId = useDeviceStore((s) => s.selectedDeviceId);
   const allDevices = useDeviceStore((s) => s.devices);
   const deviceObj = allDevices.find((d) => d.id === selectedDeviceId) ?? null;

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ConfigProvider, Layout, Tabs, theme } from "antd";
+import { App as AntApp, ConfigProvider, Layout, Tabs, theme } from "antd";
 import { Sidebar } from "./components/layout/Sidebar";
 import { TitleBar } from "./components/layout/TitleBar";
 import { StatusBar } from "./components/layout/StatusBar";
@@ -58,7 +58,7 @@ function App() {
         token: { colorBgContainer: "#fff", borderRadius: 6 },
       }}
     >
-      <div style={{ height: "100vh", overflow: "hidden", display: "flex", flexDirection: "column" }}>
+      <AntApp style={{ height: "100vh", overflow: "hidden", display: "flex", flexDirection: "column" }}>
         <TitleBar />
         <Layout style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
         <Sider width={200} style={{ background: "#fff" }}>
@@ -138,11 +138,11 @@ function App() {
           <StatusBar />
         </Layout>
         </Layout>
-      </div>
       <ConnectModal
         open={connectModalOpen}
         onClose={() => setConnectModalOpen(false)}
       />
+      </AntApp>
     </ConfigProvider>
   );
 }

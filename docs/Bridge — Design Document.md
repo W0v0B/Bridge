@@ -80,7 +80,7 @@ Build a Windows desktop debugging tool that unifies ADB device management, OpenH
 
 | Feature | Description | Priority |
 |---------|-------------|----------|
-| Device List | Real-time display of connected OHOS devices (USB + TCP) with auto-connect via `hdc list targets -v` | P0 |
+| Device List | Real-time display of connected OHOS devices (USB + TCP) with auto-connect; cross-references `hdc list targets` (authoritative) with `hdc list targets -v` (metadata) to filter phantom UART/loopback entries | P0 |
 | File Manager | Visual browsing of device filesystem; supports upload, download, delete; remount status shown per device | P0 |
 | HiLog | Real-time HiLog streaming with level/keyword filtering and export | P0 |
 | Shell | Interactive shell via `hdc shell`; streaming output to unified Shell tab | P0 |
@@ -154,7 +154,7 @@ tokio Runtime
 ├── Task: shell_stream_reader    # Streams adb shell stdout+stderr; emits shell_output/shell_exit
 ├── Task: file_transfer          # Streams push/pull progress; emits transfer_progress
 │
-├── Task: hdc_device_watcher     # Polls `hdc list targets -v` every 2s; emits on change
+├── Task: hdc_device_watcher     # Polls `hdc list targets` + `-v` every 2s; cross-references to filter phantoms
 ├── Task: hdc_remount            # Runs `hdc target mount` once per device per session
 ├── Task: hilog_reader           # Streams HiLog output; emits batches of parsed HilogEntry
 ├── Task: hdc_shell_stream       # Streams hdc shell output; emits hdc_shell_output/hdc_shell_exit

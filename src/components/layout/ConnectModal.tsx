@@ -1,5 +1,6 @@
 import { useState } from "react";
 import {
+  App,
   Modal,
   Segmented,
   Form,
@@ -8,7 +9,6 @@ import {
   Radio,
   Select,
   Button,
-  message,
   Tooltip,
   Typography,
 } from "antd";
@@ -26,6 +26,7 @@ interface ConnectModalProps {
 }
 
 export function ConnectModal({ open, onClose }: ConnectModalProps) {
+  const { message } = App.useApp();
   const [mode, setMode] = useState<"ADB" | "OHOS" | "Serial">("ADB");
   const [loading, setLoading] = useState(false);
   const [portsLoading, setPortsLoading] = useState(false);

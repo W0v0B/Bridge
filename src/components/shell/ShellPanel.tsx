@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Input, Button, InputNumber, Tooltip, Typography, message } from "antd";
+import { App, Input, Button, InputNumber, Tooltip, Typography } from "antd";
 import {
   StopOutlined, ClearOutlined, SettingOutlined,
   DownloadOutlined, FileAddOutlined,
@@ -20,6 +20,7 @@ import { QuickCommandsPanel } from "./QuickCommandsPanel";
 const { Text } = Typography;
 
 export function ShellPanel() {
+  const { message } = App.useApp();
   const selectedDeviceId = useDeviceStore((s) => s.selectedDeviceId);
   const devices = useDeviceStore((s) => s.devices);
   const selectedDevice = devices.find((d) => d.id === selectedDeviceId);

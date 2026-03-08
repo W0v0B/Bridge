@@ -1,10 +1,10 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
 import {
+  App,
   Table,
   Button,
   Input,
   Popconfirm,
-  message,
   Typography,
   Space,
   Tooltip,
@@ -34,6 +34,7 @@ const TYPE_TAG: Record<string, { color: string }> = {
 };
 
 export function HdcAppManager() {
+  const { message } = App.useApp();
   const selectedDeviceId = useDeviceStore((s) => s.selectedDeviceId);
   const allDevices = useDeviceStore((s) => s.devices);
   const deviceObj = allDevices.find((d) => d.id === selectedDeviceId) ?? null;

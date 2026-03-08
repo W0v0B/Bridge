@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import {
-  Button, Input, InputNumber, Space, Typography, message, Tooltip, Divider,
+  App, Button, Input, InputNumber, Space, Typography, Tooltip, Divider,
 } from "antd";
 import {
   DeleteOutlined, SendOutlined, PlusOutlined,
@@ -30,6 +30,7 @@ interface SeqEntry {
 }
 
 export function QuickCommandsPanel({ onOutput, onStreamStart }: QuickCommandsPanelProps) {
+  const { message } = App.useApp();
   const commands = useCommandStore((s) => s.commands);
   const addCommand = useCommandStore((s) => s.addCommand);
   const removeCommand = useCommandStore((s) => s.removeCommand);
