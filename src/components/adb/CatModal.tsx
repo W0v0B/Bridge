@@ -198,6 +198,7 @@ export function CatModal({ open, onClose, serial, path }: CatModalProps) {
               background: "var(--card-bg)",
               borderRadius: 4,
               border: "1px solid var(--border)",
+              color: "var(--text-primary)",
               fontFamily: "monospace",
               fontSize: 12,
               whiteSpace: "pre-wrap",

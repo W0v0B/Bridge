@@ -300,7 +300,7 @@ export function ShellPanel() {
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          color: "#8c8c8c",
+          color: "var(--text-secondary)",
         }}
       >
         <Text type="secondary" style={{ fontSize: 16 }}>
@@ -319,7 +319,7 @@ export function ShellPanel() {
             display: "flex",
             flexDirection: "column",
             height: "100%",
-            background: "#1e1e1e",
+            background: "var(--term-bg)",
             borderRadius: 6,
             overflow: "hidden",
           }}
@@ -328,8 +328,8 @@ export function ShellPanel() {
           <div
             style={{
               padding: "6px 12px",
-              background: "#2d2d2d",
-              borderBottom: "1px solid #404040",
+              background: "var(--term-header-bg)",
+              borderBottom: "1px solid var(--term-border)",
               display: "flex",
               alignItems: "center",
               gap: 8,
@@ -343,12 +343,12 @@ export function ShellPanel() {
                 background: "#52c41a",
               }}
             />
-            <Text style={{ color: "#ccc", fontSize: 12, flex: 1 }}>
+            <Text style={{ color: "var(--term-text)", fontSize: 12, flex: 1 }}>
               {shellLabel} — {selectedDevice.name}
             </Text>
             {showSettings && (
               <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                <Text style={{ color: "#999", fontSize: 11, whiteSpace: "nowrap" }}>
+                <Text style={{ color: "var(--term-text)", fontSize: 11, whiteSpace: "nowrap", opacity: 0.7 }}>
                   Max lines
                 </Text>
                 <InputNumber
@@ -360,14 +360,14 @@ export function ShellPanel() {
                   onChange={(v) => setConfig({ shellMaxLines: v ?? 5000 })}
                   style={{ width: 80 }}
                 />
-                <Text style={{ color: "#666", fontSize: 10 }}>0=unlimited</Text>
+                <Text style={{ color: "var(--term-text)", fontSize: 10, opacity: 0.5 }}>0=unlimited</Text>
               </div>
             )}
             <Tooltip title="Export snapshot">
               <Button
                 size="small"
                 type="text"
-                icon={<DownloadOutlined style={{ color: "#999" }} />}
+                icon={<DownloadOutlined style={{ color: "var(--term-text)", opacity: 0.6 }} />}
                 onClick={handleExportSnapshot}
               />
             </Tooltip>
@@ -383,7 +383,7 @@ export function ShellPanel() {
               <Button
                 size="small"
                 type="text"
-                icon={<SettingOutlined style={{ color: showSettings ? "#1890ff" : "#999" }} />}
+                icon={<SettingOutlined style={{ color: showSettings ? "var(--term-prompt)" : "var(--term-text)", opacity: showSettings ? 1 : 0.6 }} />}
                 onClick={() => setShowSettings((v) => !v)}
               />
             </Tooltip>
@@ -391,7 +391,7 @@ export function ShellPanel() {
               <Button
                 size="small"
                 type="text"
-                icon={<ClearOutlined style={{ color: "#999" }} />}
+                icon={<ClearOutlined style={{ color: "var(--term-text)", opacity: 0.6 }} />}
                 onClick={handleClear}
               />
             </Tooltip>
@@ -407,7 +407,7 @@ export function ShellPanel() {
               fontFamily: "'Cascadia Code', 'Fira Code', 'Consolas', monospace",
               fontSize: 13,
               lineHeight: 1.5,
-              color: "#d4d4d4",
+              color: "var(--term-text)",
               whiteSpace: "pre-wrap",
               wordBreak: "break-all",
             }}
@@ -419,8 +419,8 @@ export function ShellPanel() {
           <div
             style={{
               padding: "8px 12px",
-              borderTop: "1px solid #404040",
-              background: "#2d2d2d",
+              borderTop: "1px solid var(--term-border)",
+              background: "var(--term-header-bg)",
               display: "flex",
               alignItems: "center",
               gap: 8,
@@ -440,11 +440,11 @@ export function ShellPanel() {
                 flex: 1,
                 fontFamily: "monospace",
                 fontSize: 13,
-                color: "#d4d4d4",
+                color: "var(--term-text)",
                 background: "transparent",
               }}
               prefix={
-                <span style={{ color: "#6a9955", marginRight: 4 }}>
+                <span style={{ color: "var(--term-prompt)", marginRight: 4 }}>
                   {inputPrefix}
                 </span>
               }
@@ -467,7 +467,7 @@ export function ShellPanel() {
       <PanelResizeHandle
         style={{
           width: 4,
-          background: "#f0f0f0",
+          background: "var(--border)",
           cursor: "col-resize",
         }}
       />
