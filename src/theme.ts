@@ -32,7 +32,7 @@ export const THEMES: Record<ThemeId, AppTheme> = {
     isDark: false,
     css: {
       "--tb-bg":               "#ffffff",
-      "--sidebar-bg":          "#ffffff",
+      "--sidebar-bg":          "#f5f5f5",
       "--content-bg":          "#ffffff",
       "--border":              "#f0f0f0",
       "--accent":              "#1677ff",

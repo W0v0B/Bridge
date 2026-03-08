@@ -88,7 +88,7 @@ function App() {
       <AntApp style={{ height: "100vh", overflow: "hidden", display: "flex", flexDirection: "column" }}>
         <TitleBar />
         <Layout style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
-          <Sider width={200} style={{ background: "var(--sidebar-bg)" }}>
+          <Sider width={200} style={{ background: "var(--sidebar-bg)", borderRight: "1px solid var(--border)" }}>
             <Sidebar
               onConnect={() => setConnectModalOpen(true)}
               onSettings={() => setSettingsOpen(true)}
