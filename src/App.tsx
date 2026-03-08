@@ -21,6 +21,7 @@ import { useDeviceStore } from "./store/deviceStore";
 import { useConfigStore } from "./store/configStore";
 import { THEMES } from "./theme";
 import { getDevices } from "./utils/adb";
+import { loadBgImage } from "./utils/background";
 
 const { Content, Sider } = Layout;
 
@@ -51,6 +52,7 @@ function App() {
 
   const [connectModalOpen, setConnectModalOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [bgDataUrl, setBgDataUrl] = useState<string | null>(null);
 
   const syncAdbDevices = useDeviceStore((s) => s.syncAdbDevices);
   const handleRefresh = async () => {
@@ -64,12 +66,27 @@ function App() {
 
   const themeId = useConfigStore((s) => s.config.theme);
   const appTheme = THEMES[themeId];
+  const bgImagePath = useConfigStore((s) => s.config.bgImagePath);
+  const bgOpacity = useConfigStore((s) => s.config.bgOpacity);
 
   // Apply CSS variables whenever theme changes
   useEffect(() => {
     const root = document.documentElement;
     Object.entries(appTheme.css).forEach(([k, v]) => root.style.setProperty(k, v));
   }, [appTheme]);
+
+  // Load background image as data URL whenever the stored path changes
+  useEffect(() => {
+    if (!bgImagePath) {
+      setBgDataUrl(null);
+      return;
+    }
+    loadBgImage(bgImagePath)
+      .then(setBgDataUrl)
+      .catch(() => setBgDataUrl(null));
+  }, [bgImagePath]);
+
+  const hasBg = !!bgDataUrl;
 
   return (
     <ConfigProvider
@@ -101,7 +118,24 @@ function App() {
               onSettings={() => setSettingsOpen(true)}
             />
           </Sider>
-          <Layout style={{ minHeight: 0, background: "var(--content-bg)" }}>
+          {/* Content area — position:relative so the bg layer is contained */}
+          <Layout style={{ minHeight: 0, background: hasBg ? "transparent" : "var(--content-bg)", position: "relative" }}>
+            {/* Background image layer */}
+            {hasBg && (
+              <div
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  backgroundImage: `url(${bgDataUrl})`,
+                  backgroundSize: "cover",
+                  backgroundPosition: "center",
+                  backgroundRepeat: "no-repeat",
+                  opacity: bgOpacity,
+                  pointerEvents: "none",
+                  zIndex: 0,
+                }}
+              />
+            )}
             <Content
               style={{
                 overflow: "hidden",
@@ -109,7 +143,9 @@ function App() {
                 minHeight: 0,
                 display: "flex",
                 flexDirection: "column",
-                background: "var(--content-bg)",
+                background: hasBg ? "transparent" : "var(--content-bg)",
+                position: "relative",
+                zIndex: 1,
               }}
             >
               {/* Welcome page — rendered only when no device is selected */}
@@ -128,6 +164,7 @@ function App() {
                   minHeight: 0,
                   padding: 16,
                   flexDirection: "column",
+                  background: hasBg ? "transparent" : undefined,
                 }}
               >
                 <Tabs
@@ -145,6 +182,7 @@ function App() {
                   minHeight: 0,
                   padding: 16,
                   flexDirection: "column",
+                  background: hasBg ? "transparent" : undefined,
                 }}
               >
                 <Tabs
@@ -162,6 +200,7 @@ function App() {
                   minHeight: 0,
                   padding: 16,
                   flexDirection: "column",
+                  background: hasBg ? "transparent" : undefined,
                 }}
               >
                 <Tabs

@@ -3,6 +3,9 @@ mod hdc;
 mod serial;
 mod config;
 
+use base64::Engine as _;
+use tauri::Manager as _;
+
 use adb::{apps, commands, device, file, logcat};
 use hdc::{apps as hdc_apps, commands as hdc_commands, device as hdc_device, file as hdc_file, hilog};
 use serial::manager;
@@ -79,6 +82,10 @@ pub fn run() {
             // File utilities
             write_text_file_to_path,
             append_text_to_file,
+            // Background image
+            save_bg_image,
+            load_bg_image,
+            remove_bg_image,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -364,6 +371,45 @@ async fn append_text_to_file(path: String, content: String) -> Result<(), String
         .open(&path)
         .map_err(|e| e.to_string())?;
     file.write_all(content.as_bytes()).map_err(|e| e.to_string())
+}
+
+// ── Background Image Commands ──
+
+#[tauri::command]
+async fn save_bg_image(app: tauri::AppHandle, src_path: String) -> Result<String, String> {
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
+    let src = std::path::Path::new(&src_path);
+    let ext = src.extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("jpg")
+        .to_lowercase();
+    let dest = data_dir.join(format!("background.{}", ext));
+    std::fs::copy(src, &dest).map_err(|e| e.to_string())?;
+    Ok(dest.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+async fn load_bg_image(path: String) -> Result<String, String> {
+    let data = std::fs::read(&path).map_err(|e| e.to_string())?;
+    let ext = std::path::Path::new(&path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("jpg")
+        .to_lowercase();
+    let mime = match ext.as_str() {
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp"         => "image/webp",
+        "gif"          => "image/gif",
+        _              => "image/png",
+    };
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
+    Ok(format!("data:{};base64,{}", mime, b64))
+}
+
+#[tauri::command]
+async fn remove_bg_image(path: String) -> Result<(), String> {
+    std::fs::remove_file(&path).map_err(|e| e.to_string())
 }
 
 // ── Serial Commands ──

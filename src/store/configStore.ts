@@ -16,6 +16,9 @@ interface Config {
   telnetHost: string;
   telnetPort: number;
   baudRate: number;
+  // Background image
+  bgImagePath: string | null;
+  bgOpacity: number;
 }
 
 interface ConfigState {
@@ -39,6 +42,8 @@ export const useConfigStore = create<ConfigState>()(
         telnetHost: "192.168.1.100",
         telnetPort: 23,
         baudRate: 115200,
+        bgImagePath: null,
+        bgOpacity: 0.5,
       },
       setConfig: (partial) => set((state) => ({ config: { ...state.config, ...partial } })),
     }),
