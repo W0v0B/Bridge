@@ -295,9 +295,9 @@ export function HilogPanel() {
       fontSize: 12,
       fontWeight: 600,
       lineHeight: "24px",
-      border: "1px solid " + (active ? "#1677ff" : "#d9d9d9"),
-      background: active ? "#e6f4ff" : "transparent",
-      color: active ? "#1677ff" : "#8c8c8c",
+      border: "1px solid " + (active ? "var(--accent)" : "var(--border)"),
+      background: active ? "var(--selected-bg)" : "transparent",
+      color: active ? "var(--accent)" : "var(--text-secondary)",
       borderRadius: 3,
       cursor: "pointer",
       userSelect: "none" as const,
@@ -331,7 +331,7 @@ export function HilogPanel() {
           ]}
         />
 
-        <div style={{ display: "flex", alignItems: "center", border: "1px solid #d9d9d9", borderRadius: 6, padding: "0 4px", background: "#fff", flex: "1 1 200px", maxWidth: 400, minWidth: 160 }}>
+        <div style={{ display: "flex", alignItems: "center", border: "1px solid var(--border)", borderRadius: 6, padding: "0 4px", background: "var(--card-bg)", flex: "1 1 200px", maxWidth: 400, minWidth: 160 }}>
           <Input
             placeholder="Filter (tag or message)"
             value={filterText}
@@ -398,12 +398,12 @@ export function HilogPanel() {
         style={{
           flex: 1,
           minHeight: 0,
-          background: "#fafafa",
+          background: "var(--card-bg)",
           padding: 8,
           overflow: "auto",
           fontFamily: "'Cascadia Code', 'Fira Code', 'Consolas', 'Monaco', monospace",
           borderRadius: 6,
-          border: "1px solid #f0f0f0",
+          border: "1px solid var(--border)",
         }}
       >
         <div ref={contentRef} />

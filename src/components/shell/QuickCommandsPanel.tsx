@@ -217,8 +217,8 @@ export function QuickCommandsPanel({ onOutput, onStreamStart }: QuickCommandsPan
               padding: "6px 8px",
               marginBottom: 4,
               borderRadius: 6,
-              border: "1px solid #f0f0f0",
-              background: "#fafafa",
+              border: "1px solid var(--border)",
+              background: "var(--card-bg)",
             }}
           >
             <div style={{ flex: 1, minWidth: 0 }}>
@@ -285,7 +285,7 @@ export function QuickCommandsPanel({ onOutput, onStreamStart }: QuickCommandsPan
       </div>
 
       {/* Add command form */}
-      <div style={{ borderTop: "1px solid #f0f0f0", paddingTop: 8 }}>
+      <div style={{ borderTop: "1px solid var(--border)", paddingTop: 8 }}>
         <Space direction="vertical" style={{ width: "100%" }} size={4}>
           <Input size="small" placeholder="Label" value={newLabel}
             onChange={(e) => setNewLabel(e.target.value)} />

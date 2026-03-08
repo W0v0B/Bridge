@@ -44,6 +44,7 @@ export const THEMES: Record<ThemeId, AppTheme> = {
       "--wc-close-hover-text": "#ffffff",
       "--scrollbar-thumb":     "#d9d9d9",
       "--scrollbar-thumb-hover": "#bfbfbf",
+      "--card-bg":             "#f5f5f5",
     },
     antdAlgorithm: antdTheme.defaultAlgorithm,
     antdToken: {
@@ -76,6 +77,7 @@ export const THEMES: Record<ThemeId, AppTheme> = {
       "--wc-close-hover-text": "#ffffff",
       "--scrollbar-thumb":     "#424242",
       "--scrollbar-thumb-hover": "#5a5a5a",
+      "--card-bg":             "#2a2a2b",
     },
     antdAlgorithm: antdTheme.darkAlgorithm,
     antdToken: {
@@ -108,6 +110,7 @@ export const THEMES: Record<ThemeId, AppTheme> = {
       "--wc-close-hover-text": "#ffffff",
       "--scrollbar-thumb":     "#4a3055",
       "--scrollbar-thumb-hover": "#6a4075",
+      "--card-bg":             "#271930",
     },
     antdAlgorithm: antdTheme.darkAlgorithm,
     antdToken: {
@@ -140,6 +143,7 @@ export const THEMES: Record<ThemeId, AppTheme> = {
       "--wc-close-hover-text": "#ffffff",
       "--scrollbar-thumb":     "#2a4555",
       "--scrollbar-thumb-hover": "#3a5a6a",
+      "--card-bg":             "#1c2d3a",
     },
     antdAlgorithm: antdTheme.darkAlgorithm,
     antdToken: {
@@ -172,6 +176,7 @@ export const THEMES: Record<ThemeId, AppTheme> = {
       "--wc-close-hover-text": "#ffffff",
       "--scrollbar-thumb":     "#3a2a5a",
       "--scrollbar-thumb-hover": "#4a3a7a",
+      "--card-bg":             "#1c1830",
     },
     antdAlgorithm: antdTheme.darkAlgorithm,
     antdToken: {
@@ -204,6 +209,7 @@ export const THEMES: Record<ThemeId, AppTheme> = {
       "--wc-close-hover-text": "#eceff4",
       "--scrollbar-thumb":     "#4c566a",
       "--scrollbar-thumb-hover": "#5e6b7d",
+      "--card-bg":             "#373e4d",
     },
     antdAlgorithm: antdTheme.darkAlgorithm,
     antdToken: {

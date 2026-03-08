@@ -17,7 +17,7 @@ function DeviceCard({ icon, label, features }: DeviceTypeCard) {
   return (
     <div
       style={{
-        background: "#f5f5f5",
+        background: "var(--card-bg)",
         borderRadius: 8,
         padding: "16px 20px",
         flex: "1 1 0",
@@ -25,12 +25,12 @@ function DeviceCard({ icon, label, features }: DeviceTypeCard) {
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-        <span style={{ fontSize: 16, color: "#1677ff" }}>{icon}</span>
+        <span style={{ fontSize: 16, color: "var(--accent)" }}>{icon}</span>
         <Text strong style={{ fontSize: 13 }}>{label}</Text>
       </div>
       {features.map((f, i) => (
         <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-          <span style={{ width: 4, height: 4, borderRadius: "50%", background: "#bfbfbf", flexShrink: 0 }} />
+          <span style={{ width: 4, height: 4, borderRadius: "50%", background: "var(--text-secondary)", flexShrink: 0 }} />
           <Text type="secondary" style={{ fontSize: 12 }}>{f}</Text>
         </div>
       ))}
