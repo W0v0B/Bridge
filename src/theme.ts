@@ -16,6 +16,7 @@ export interface AppTheme {
   antdToken: {
     colorPrimary: string;
     colorBgContainer: string;
+    colorBgElevated: string;
     colorBgLayout: string;
     colorBorder: string;
     borderRadius: number;
@@ -55,6 +56,7 @@ export const THEMES: Record<ThemeId, AppTheme> = {
     antdToken: {
       colorPrimary:    "#1677ff",
       colorBgContainer: "#ffffff",
+      colorBgElevated: "#ffffff",
       colorBgLayout:   "#f5f5f5",
       colorBorder:     "#d9d9d9",
       borderRadius:    6,
@@ -93,6 +95,7 @@ export const THEMES: Record<ThemeId, AppTheme> = {
     antdToken: {
       colorPrimary:    "#007acc",
       colorBgContainer: "#252526",
+      colorBgElevated: "#2d2d2d",
       colorBgLayout:   "#1e1e1e",
       colorBorder:     "#454545",
       borderRadius:    6,
@@ -131,6 +134,7 @@ export const THEMES: Record<ThemeId, AppTheme> = {
     antdToken: {
       colorPrimary:    "#f06090",
       colorBgContainer: "#21172c",
+      colorBgElevated: "#2d2040",
       colorBgLayout:   "#191324",
       colorBorder:     "#3e2d4a",
       borderRadius:    6,
@@ -169,6 +173,7 @@ export const THEMES: Record<ThemeId, AppTheme> = {
     antdToken: {
       colorPrimary:    "#63c2b8",
       colorBgContainer: "#182433",
+      colorBgElevated: "#1e3244",
       colorBgLayout:   "#13202e",
       colorBorder:     "#2a3d4f",
       borderRadius:    6,
@@ -207,6 +212,7 @@ export const THEMES: Record<ThemeId, AppTheme> = {
     antdToken: {
       colorPrimary:    "#8a70fa",
       colorBgContainer: "#181426",
+      colorBgElevated: "#201a38",
       colorBgLayout:   "#11101c",
       colorBorder:     "#332a4a",
       borderRadius:    6,
@@ -245,6 +251,7 @@ export const THEMES: Record<ThemeId, AppTheme> = {
     antdToken: {
       colorPrimary:    "#88c0d0",
       colorBgContainer: "#3b4252",
+      colorBgElevated: "#434c5e",
       colorBgLayout:   "#2e3440",
       colorBorder:     "#4c566a",
       borderRadius:    6,

@@ -72,6 +72,7 @@ function App() {
         token: {
           colorPrimary:    appTheme.antdToken.colorPrimary,
           colorBgContainer: appTheme.antdToken.colorBgContainer,
+          colorBgElevated: appTheme.antdToken.colorBgElevated,
           colorBgLayout:   appTheme.antdToken.colorBgLayout,
           colorBorder:     appTheme.antdToken.colorBorder,
           borderRadius:    appTheme.antdToken.borderRadius,
