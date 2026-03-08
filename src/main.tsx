@@ -8,3 +8,13 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <App />
   </React.StrictMode>
 );
+
+// Fade out and remove the splash screen once React has painted its first frame
+requestAnimationFrame(() => {
+  requestAnimationFrame(() => {
+    const splash = document.getElementById("splash");
+    if (!splash) return;
+    splash.style.opacity = "0";
+    splash.addEventListener("transitionend", () => splash.remove(), { once: true });
+  });
+});
