@@ -27,7 +27,7 @@ export function FileManager() {
   const { message } = App.useApp();
   const selectedDeviceId = useDeviceStore((s) => s.selectedDeviceId);
   const allDevices = useDeviceStore((s) => s.devices);
-  const deviceObj = allDevices.find((d) => d.id === selectedDeviceId) ?? null;
+  const deviceObj = allDevices.find((d) => d.id === selectedDeviceId && d.type === "adb") ?? null;
   const selectedDevice = deviceObj?.serial ?? null;
   const isRoot = deviceObj?.isRoot ?? false;
   const rootInfo = deviceObj?.rootInfo ?? "";

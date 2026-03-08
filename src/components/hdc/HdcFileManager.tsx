@@ -44,7 +44,7 @@ export function HdcFileManager() {
   const { message } = App.useApp();
   const selectedDeviceId = useDeviceStore((s) => s.selectedDeviceId);
   const allDevices = useDeviceStore((s) => s.devices);
-  const deviceObj = allDevices.find((d) => d.id === selectedDeviceId) ?? null;
+  const deviceObj = allDevices.find((d) => d.id === selectedDeviceId && d.type === "ohos") ?? null;
   const connectKey = deviceObj?.serial ?? null;
   const isRemounted = deviceObj?.isRemounted ?? false;
   const remountInfo = deviceObj?.remountInfo ?? "";

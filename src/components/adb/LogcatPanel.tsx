@@ -65,7 +65,7 @@ export function LogcatPanel() {
   const selectedDeviceId = useDeviceStore((s) => s.selectedDeviceId);
   const allDevices = useDeviceStore((s) => s.devices);
   const selectedDevice =
-    allDevices.find((d) => d.id === selectedDeviceId)?.serial ?? null;
+    allDevices.find((d) => d.id === selectedDeviceId && d.type === "adb")?.serial ?? null;
 
   const logcatMaxLines = useConfigStore((s) => s.config.logcatMaxLines);
   const setConfig = useConfigStore((s) => s.setConfig);
@@ -527,16 +527,17 @@ export function LogcatPanel() {
         {/* Max lines — always visible, compact */}
         <div style={{ display: "flex", alignItems: "center", gap: 4, marginLeft: "auto" }}>
           <span style={{ color: "#999", fontSize: 11, whiteSpace: "nowrap" }}>{entryCount} lines</span>
-          <InputNumber
-            size="small"
-            min={0}
-            max={100000}
-            step={1000}
-            value={logcatMaxLines}
-            onChange={(v) => setConfig({ logcatMaxLines: v ?? 5000 })}
-            style={{ width: 110 }}
-            addonBefore="Max"
-          />
+          <Space.Compact size="small">
+            <Input value="Max" disabled style={{ width: 40, textAlign: "center", color: "inherit" }} />
+            <InputNumber
+              min={0}
+              max={100000}
+              step={1000}
+              value={logcatMaxLines}
+              onChange={(v) => setConfig({ logcatMaxLines: v ?? 5000 })}
+              style={{ width: 72 }}
+            />
+          </Space.Compact>
         </div>
       </div>
 
