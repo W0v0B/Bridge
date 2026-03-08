@@ -2,6 +2,7 @@ mod adb;
 mod hdc;
 mod serial;
 mod config;
+pub mod util;
 
 use base64::Engine as _;
 use tauri::Manager as _;

@@ -1,5 +1,5 @@
 use serde::Serialize;
-use tokio::process::Command;
+use crate::util::cmd;
 
 use super::commands::hdc_path;
 
@@ -14,7 +14,7 @@ pub struct BundleInfo {
 /// List all installed bundles, resolving install paths in parallel via `bm dump -n`.
 pub async fn list_bundles(connect_key: &str) -> Result<Vec<BundleInfo>, String> {
     // Step 1: fast list of names
-    let output = Command::new(hdc_path())
+    let output = cmd(hdc_path())
         .args(["-t", connect_key, "shell", "bm", "dump", "-a"])
         .output()
         .await
@@ -62,7 +62,7 @@ fn type_order(t: &str) -> u8 {
 }
 
 async fn fetch_bundle_detail(connect_key: &str, bundle_name: &str) -> BundleInfo {
-    let result = Command::new(hdc_path())
+    let result = cmd(hdc_path())
         .args(["-t", connect_key, "shell", "bm", "dump", "-n", bundle_name])
         .output()
         .await;
@@ -125,7 +125,7 @@ fn extract_json_string(line: &str) -> Option<String> {
 
 /// Force-stop a running bundle via `aa force-stop <bundle_name>`.
 pub async fn force_stop_bundle(connect_key: &str, bundle_name: &str) -> Result<(), String> {
-    let output = Command::new(hdc_path())
+    let output = cmd(hdc_path())
         .args(["-t", connect_key, "shell", "aa", "force-stop", bundle_name])
         .output()
         .await
@@ -141,7 +141,7 @@ pub async fn force_stop_bundle(connect_key: &str, bundle_name: &str) -> Result<(
 
 /// Clear bundle data via `bm clean -n <bundle_name> -d`.
 pub async fn clear_bundle_data(connect_key: &str, bundle_name: &str) -> Result<(), String> {
-    let output = Command::new(hdc_path())
+    let output = cmd(hdc_path())
         .args(["-t", connect_key, "shell", "bm", "clean", "-n", bundle_name, "-d"])
         .output()
         .await
@@ -157,7 +157,7 @@ pub async fn clear_bundle_data(connect_key: &str, bundle_name: &str) -> Result<(
 
 /// Install a HAP package on an OHOS device via `hdc install <path>`.
 pub async fn install_hap(connect_key: &str, hap_path: &str) -> Result<String, String> {
-    let output = Command::new(hdc_path())
+    let output = cmd(hdc_path())
         .args(["-t", connect_key, "install", hap_path])
         .output()
         .await
@@ -176,7 +176,7 @@ pub async fn install_hap(connect_key: &str, hap_path: &str) -> Result<String, St
 
 /// Uninstall a bundle from an OHOS device via `hdc uninstall <bundleName>`.
 pub async fn uninstall_bundle(connect_key: &str, bundle_name: &str) -> Result<String, String> {
-    let output = Command::new(hdc_path())
+    let output = cmd(hdc_path())
         .args(["-t", connect_key, "uninstall", bundle_name])
         .output()
         .await

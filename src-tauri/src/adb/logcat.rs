@@ -7,7 +7,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::Command;
+use crate::util::cmd;
 use tokio::time::Instant;
 
 use super::commands::adb_path;
@@ -138,7 +138,7 @@ pub async fn start(
         }
     }
 
-    let mut child = Command::new(adb_path())
+    let mut child = cmd(adb_path())
         .args(["-s", serial, "logcat", "-v", "threadtime"])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
@@ -225,7 +225,7 @@ pub async fn stop(serial: &str) -> Result<(), String> {
 
     if let Some(pid) = pid {
         // On Windows, use taskkill with /T to kill the process tree
-        let _ = tokio::process::Command::new("taskkill")
+        let _ = cmd("taskkill")
             .args(["/F", "/T", "/PID", &pid.to_string()])
             .output()
             .await;
@@ -249,7 +249,7 @@ pub async fn start_tlogcat(
         }
     }
 
-    let mut child = Command::new(adb_path())
+    let mut child = cmd(adb_path())
         .args(["-s", serial, "shell", "tlogcat"])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
@@ -328,7 +328,7 @@ pub async fn stop_tlogcat(serial: &str) -> Result<(), String> {
     };
 
     if let Some(pid) = pid {
-        let _ = tokio::process::Command::new("taskkill")
+        let _ = cmd("taskkill")
             .args(["/F", "/T", "/PID", &pid.to_string()])
             .output()
             .await;
@@ -340,7 +340,7 @@ pub async fn stop_tlogcat(serial: &str) -> Result<(), String> {
 
 /// Clear the on-device logcat ring buffer via `adb logcat -c`.
 pub async fn clear_device_log(serial: &str) -> Result<(), String> {
-    let output = Command::new(adb_path())
+    let output = cmd(adb_path())
         .args(["-s", serial, "logcat", "-c"])
         .output()
         .await

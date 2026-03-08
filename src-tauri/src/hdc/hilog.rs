@@ -7,7 +7,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::Command;
+use crate::util::cmd;
 use tokio::time::Instant;
 
 use super::commands::hdc_path;
@@ -92,7 +92,7 @@ pub async fn start(
         }
     }
 
-    let mut child = Command::new(hdc_path())
+    let mut child = cmd(hdc_path())
         .args(["-t", connect_key, "shell", "hilog"])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
@@ -174,7 +174,7 @@ pub async fn stop(connect_key: &str) -> Result<(), String> {
     };
 
     if let Some(pid) = pid {
-        let _ = tokio::process::Command::new("taskkill")
+        let _ = cmd("taskkill")
             .args(["/F", "/T", "/PID", &pid.to_string()])
             .output()
             .await;
@@ -186,7 +186,7 @@ pub async fn stop(connect_key: &str) -> Result<(), String> {
 
 /// Clear the on-device hilog ring buffer via `hilog -r`.
 pub async fn clear(connect_key: &str) -> Result<(), String> {
-    let output = Command::new(hdc_path())
+    let output = cmd(hdc_path())
         .args(["-t", connect_key, "shell", "hilog", "-r"])
         .output()
         .await

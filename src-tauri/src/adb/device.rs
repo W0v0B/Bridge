@@ -5,7 +5,7 @@ use std::time::Duration;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
-use tokio::process::Command;
+use crate::util::cmd;
 
 use super::commands::adb_path;
 
@@ -111,7 +111,7 @@ pub async fn disconnect_device(serial: &str) -> Result<String, String> {
 /// Captures output text for both steps so the UI can show failure reasons.
 async fn attempt_root_and_remount(serial: String, app: AppHandle) {
     // ── Step 1: adb root ──
-    let (is_root, root_info) = match Command::new(adb_path())
+    let (is_root, root_info) = match cmd(adb_path())
         .args(["-s", &serial, "root"])
         .output()
         .await
@@ -131,7 +131,7 @@ async fn attempt_root_and_remount(serial: String, app: AppHandle) {
                 let mut rooted = false;
                 for _ in 0..6 {
                     tokio::time::sleep(Duration::from_secs(1)).await;
-                    if let Ok(out) = Command::new(adb_path())
+                    if let Ok(out) = cmd(adb_path())
                         .args(["-s", &serial, "shell", "whoami"])
                         .output()
                         .await
@@ -155,7 +155,7 @@ async fn attempt_root_and_remount(serial: String, app: AppHandle) {
 
     // ── Step 2: adb remount (only if root succeeded) ──
     let (is_remounted, remount_info) = if is_root {
-        match Command::new(adb_path())
+        match cmd(adb_path())
             .args(["-s", &serial, "remount"])
             .output()
             .await

@@ -3,7 +3,7 @@ use regex::Regex;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::Command;
+use crate::util::cmd;
 
 use super::commands::{adb_path, run_shell};
 
@@ -111,7 +111,7 @@ pub async fn push_files(
 
         let id = uuid::Uuid::new_v4().to_string();
 
-        let mut child = Command::new(adb_path())
+        let mut child = cmd(adb_path())
             .args(["-s", serial, "push", local_path, remote_path])
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -184,7 +184,7 @@ pub async fn pull_file(
 
     let id = uuid::Uuid::new_v4().to_string();
 
-    let mut child = Command::new(adb_path())
+    let mut child = cmd(adb_path())
         .args(["-s", serial, "pull", remote_path, local_path])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())

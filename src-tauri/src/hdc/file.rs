@@ -2,7 +2,7 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
-use tokio::process::Command;
+use crate::util::cmd;
 
 use super::commands::{hdc_path, run_hdc_shell};
 use crate::adb::file::TransferProgress;
@@ -108,7 +108,7 @@ pub async fn send_files(
             },
         );
 
-        let status = Command::new(hdc_path())
+        let status = cmd(hdc_path())
             .args(["-t", connect_key, "file", "send", local_path, remote_path])
             .output()
             .await
@@ -163,7 +163,7 @@ pub async fn recv_file(
         },
     );
 
-    let status = Command::new(hdc_path())
+    let status = cmd(hdc_path())
         .args(["-t", connect_key, "file", "recv", remote_path, local_path])
         .output()
         .await

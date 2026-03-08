@@ -6,7 +6,7 @@ use once_cell::sync::Lazy;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 use tokio::io::AsyncReadExt;
-use tokio::process::Command;
+use crate::util::cmd;
 
 /// Resolve the path to the HDC executable.
 /// Search order:
@@ -78,7 +78,7 @@ pub struct HdcShellExit {
 /// Run an HDC command with the given arguments and return stdout.
 /// Returns Err on non-zero exit or spawn failure.
 pub async fn run_hdc(args: &[&str]) -> Result<String, String> {
-    let output = Command::new(hdc_path())
+    let output = cmd(hdc_path())
         .args(args)
         .output()
         .await
@@ -119,13 +119,13 @@ pub async fn start_shell_stream(
         procs.remove(&key)
     };
     if let Some(pid) = old_pid {
-        let _ = Command::new("taskkill")
+        let _ = cmd("taskkill")
             .args(["/F", "/T", "/PID", &pid.to_string()])
             .output()
             .await;
     }
 
-    let mut child = Command::new(hdc_path())
+    let mut child = cmd(hdc_path())
         .args(["-t", connect_key, "shell", command])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -217,7 +217,7 @@ pub async fn stop_shell_stream(connect_key: &str) -> Result<(), String> {
     };
 
     if let Some(pid) = pid {
-        let _ = Command::new("taskkill")
+        let _ = cmd("taskkill")
             .args(["/F", "/T", "/PID", &pid.to_string()])
             .output()
             .await;

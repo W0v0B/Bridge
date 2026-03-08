@@ -5,7 +5,7 @@ use std::time::Duration;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
-use tokio::process::Command;
+use crate::util::cmd;
 
 use super::commands::{hdc_path, run_hdc};
 
@@ -124,7 +124,7 @@ pub async fn connect_device(addr: &str) -> Result<String, String> {
 /// Attempt `hdc target mount` for a device.
 /// Updates DEVICE_REMOUNT_STATUS and re-emits hdc_devices_changed.
 async fn attempt_remount(connect_key: String, app: AppHandle) {
-    let output = Command::new(hdc_path())
+    let output = cmd(hdc_path())
         .args(["-t", &connect_key, "target", "mount"])
         .output()
         .await;

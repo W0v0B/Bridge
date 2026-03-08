@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use serde::Serialize;
-use tokio::process::Command;
+use crate::util::cmd;
 
 use super::commands::adb_path;
 
@@ -69,7 +69,7 @@ pub async fn list_packages(serial: &str) -> Result<Vec<PackageInfo>, String> {
 
 /// Re-enable a package that was hidden via `pm uninstall -k --user 0`.
 pub async fn re_enable_package(serial: &str, package: &str) -> Result<String, String> {
-    let output = Command::new(adb_path())
+    let output = cmd(adb_path())
         .args(["-s", serial, "shell", "pm", "install-existing", "--user", "0", package])
         .output()
         .await
@@ -97,7 +97,7 @@ fn parse_package_names_from_paths(output: &str) -> HashSet<String> {
 
 /// Force-stop a running app via `adb shell am force-stop`.
 pub async fn force_stop_package(serial: &str, package: &str) -> Result<(), String> {
-    let output = Command::new(adb_path())
+    let output = cmd(adb_path())
         .args(["-s", serial, "shell", "am", "force-stop", package])
         .output()
         .await
@@ -112,7 +112,7 @@ pub async fn force_stop_package(serial: &str, package: &str) -> Result<(), Strin
 
 /// Clear all data for an app via `adb shell pm clear`.
 pub async fn clear_package_data(serial: &str, package: &str) -> Result<String, String> {
-    let output = Command::new(adb_path())
+    let output = cmd(adb_path())
         .args(["-s", serial, "shell", "pm", "clear", package])
         .output()
         .await
@@ -170,21 +170,21 @@ pub async fn uninstall_package(
 ) -> Result<String, String> {
     let output = if !is_system {
         // Standard uninstall for user-installed apps
-        Command::new(adb_path())
+        cmd(adb_path())
             .args(["-s", serial, "uninstall", package])
             .output()
             .await
             .map_err(|e| format!("Failed to run adb uninstall: {}", e))?
     } else if is_root {
         // Full removal of system app (requires root)
-        Command::new(adb_path())
+        cmd(adb_path())
             .args(["-s", serial, "shell", &format!("pm uninstall {}", package)])
             .output()
             .await
             .map_err(|e| format!("Failed to run pm uninstall: {}", e))?
     } else {
         // Soft disable for current user (no root required)
-        Command::new(adb_path())
+        cmd(adb_path())
             .args([
                 "-s",
                 serial,
@@ -212,7 +212,7 @@ async fn run_pm(serial: &str, pm_args: &[&str]) -> Result<String, String> {
     let mut args = vec!["-s", serial, "shell", "pm"];
     args.extend_from_slice(pm_args);
 
-    let output = Command::new(adb_path())
+    let output = cmd(adb_path())
         .args(&args)
         .output()
         .await

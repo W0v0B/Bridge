@@ -6,7 +6,7 @@ use once_cell::sync::Lazy;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 use tokio::io::AsyncReadExt;
-use tokio::process::Command;
+use crate::util::cmd;
 
 /// Resolve the path to the ADB executable.
 /// Search order:
@@ -73,7 +73,7 @@ pub struct ShellExit {
 
 /// Run an ADB command with the given arguments and return stdout.
 pub async fn run_adb(args: &[&str]) -> Result<String, String> {
-    let output = Command::new(adb_path())
+    let output = cmd(adb_path())
         .args(args)
         .output()
         .await
@@ -128,13 +128,13 @@ pub async fn start_shell_stream(
         procs.remove(&key)
     };
     if let Some(pid) = old_pid {
-        let _ = Command::new("taskkill")
+        let _ = cmd("taskkill")
             .args(["/F", "/T", "/PID", &pid.to_string()])
             .output()
             .await;
     }
 
-    let mut child = Command::new(adb_path())
+    let mut child = cmd(adb_path())
         .args(["-s", serial, "shell", command])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -228,7 +228,7 @@ pub async fn stop_shell_stream(serial: &str) -> Result<(), String> {
     };
 
     if let Some(pid) = pid {
-        let _ = Command::new("taskkill")
+        let _ = cmd("taskkill")
             .args(["/F", "/T", "/PID", &pid.to_string()])
             .output()
             .await;
