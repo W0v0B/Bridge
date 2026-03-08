@@ -25,6 +25,27 @@ import { loadBgImage } from "./utils/background";
 
 const { Content, Sider } = Layout;
 
+// Isolated component so opacity slider changes only re-render this div,
+// not the entire App tree.
+function BgLayer({ dataUrl }: { dataUrl: string }) {
+  const bgOpacity = useConfigStore((s) => s.config.bgOpacity);
+  return (
+    <div
+      style={{
+        position: "absolute",
+        inset: 0,
+        backgroundImage: `url(${dataUrl})`,
+        backgroundSize: "cover",
+        backgroundPosition: "center",
+        backgroundRepeat: "no-repeat",
+        opacity: bgOpacity,
+        pointerEvents: "none",
+        zIndex: 0,
+      }}
+    />
+  );
+}
+
 // Tab item arrays are module-level constants so the component instances inside
 // them are never recreated — their internal state survives device switches.
 const adbTabs = [
@@ -67,7 +88,6 @@ function App() {
   const themeId = useConfigStore((s) => s.config.theme);
   const appTheme = THEMES[themeId];
   const bgImagePath = useConfigStore((s) => s.config.bgImagePath);
-  const bgOpacity = useConfigStore((s) => s.config.bgOpacity);
 
   // Apply CSS variables whenever theme changes
   useEffect(() => {
@@ -120,22 +140,8 @@ function App() {
           </Sider>
           {/* Content area — position:relative so the bg layer is contained */}
           <Layout style={{ minHeight: 0, background: hasBg ? "transparent" : "var(--content-bg)", position: "relative" }}>
-            {/* Background image layer */}
-            {hasBg && (
-              <div
-                style={{
-                  position: "absolute",
-                  inset: 0,
-                  backgroundImage: `url(${bgDataUrl})`,
-                  backgroundSize: "cover",
-                  backgroundPosition: "center",
-                  backgroundRepeat: "no-repeat",
-                  opacity: bgOpacity,
-                  pointerEvents: "none",
-                  zIndex: 0,
-                }}
-              />
-            )}
+            {/* Background image layer — isolated component to avoid re-rendering App on opacity change */}
+            {hasBg && <BgLayer dataUrl={bgDataUrl!} />}
             <Content
               style={{
                 overflow: "hidden",
