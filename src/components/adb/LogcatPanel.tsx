@@ -441,6 +441,7 @@ export function LogcatPanel() {
       {/* Toolbar row */}
       <div style={{ marginBottom: 8, flexShrink: 0, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         <Segmented
+          style={{ background: "var(--card-bg)" }}
           options={[
             {
               label: (
