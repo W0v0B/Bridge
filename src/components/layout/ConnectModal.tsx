@@ -17,6 +17,7 @@ import { connectNetworkDevice, getDevices } from "../../utils/adb";
 import { connectOhosDevice, getOhosDevices } from "../../utils/hdc";
 import { listPorts, openPort, openTelnetSession } from "../../utils/serial";
 import { useDeviceStore } from "../../store/deviceStore";
+import { useConfigStore } from "../../store/configStore";
 
 const { Text } = Typography;
 
@@ -27,29 +28,31 @@ interface ConnectModalProps {
 
 export function ConnectModal({ open, onClose }: ConnectModalProps) {
   const { message } = App.useApp();
+  const cfg = useConfigStore((s) => s.config);
+  const setConfig = useConfigStore((s) => s.setConfig);
   const [mode, setMode] = useState<"ADB" | "OHOS" | "Serial">("ADB");
   const [loading, setLoading] = useState(false);
   const [portsLoading, setPortsLoading] = useState(false);
 
   // ADB fields
-  const [host, setHost] = useState("192.168.1.100");
-  const [port, setPort] = useState(5555);
+  const [host, setHost] = useState(cfg.adbHost);
+  const [port, setPort] = useState(cfg.adbPort);
   const [adbName, setAdbName] = useState("");
 
   // OHOS fields
-  const [ohosHost, setOhosHost] = useState("192.168.1.100");
-  const [ohosPort, setOhosPort] = useState(5555);
+  const [ohosHost, setOhosHost] = useState(cfg.ohosHost);
+  const [ohosPort, setOhosPort] = useState(cfg.ohosPort);
   const [ohosName, setOhosName] = useState("");
 
   // Serial fields
   const [serialMode, setSerialMode] = useState<"com" | "telnet">("com");
   const [ports, setPorts] = useState<string[]>([]);
   const [selectedPort, setSelectedPort] = useState<string>("");
-  const [baudRate, setBaudRate] = useState(115200);
+  const [baudRate, setBaudRate] = useState(cfg.baudRate);
   const [serialName, setSerialName] = useState("");
   // Telnet fields
-  const [telnetHost, setTelnetHost] = useState("192.168.1.100");
-  const [telnetPort, setTelnetPort] = useState(23);
+  const [telnetHost, setTelnetHost] = useState(cfg.telnetHost);
+  const [telnetPort, setTelnetPort] = useState(cfg.telnetPort);
 
   const addDevice = useDeviceStore((s) => s.addDevice);
   const syncAdbDevices = useDeviceStore((s) => s.syncAdbDevices);
@@ -86,6 +89,7 @@ export function ConnectModal({ open, onClose }: ConnectModalProps) {
         useDeviceStore.getState().updateDevice(serial, { name });
       }
 
+      setConfig({ adbHost: host, adbPort: port });
       onClose();
     } catch (e) {
       message.error(String(e));
@@ -108,6 +112,7 @@ export function ConnectModal({ open, onClose }: ConnectModalProps) {
         useDeviceStore.getState().updateDevice(addr, { name: ohosName.trim() });
       }
 
+      setConfig({ ohosHost, ohosPort });
       onClose();
     } catch (e) {
       message.error(String(e));
@@ -126,12 +131,14 @@ export function ConnectModal({ open, onClose }: ConnectModalProps) {
         const name = serialName.trim() || id;
         addDevice({ id, type: "serial", name, serial: id, state: "connected" });
         message.success(`Connected to ${id}`);
+        setConfig({ telnetHost, telnetPort });
       } else {
         if (!selectedPort) return;
         await openPort(selectedPort, baudRate);
         const name = serialName.trim() || selectedPort;
         addDevice({ id: selectedPort, type: "serial", name, serial: selectedPort, state: "connected" });
         message.success(`Connected to ${selectedPort}`);
+        setConfig({ baudRate });
       }
       onClose();
     } catch (e) {
