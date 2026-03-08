@@ -294,7 +294,7 @@ export function FileManager() {
               cursor: record.is_dir ? "pointer" : "default",
               background:
                 selectedFile?.path === record.path
-                  ? "#e6f4ff"
+                  ? "var(--selected-bg)"
                   : undefined,
             },
           })}

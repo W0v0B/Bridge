@@ -179,7 +179,7 @@ export function CatModal({ open, onClose, serial, path }: CatModalProps) {
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              background: "rgba(255,255,255,0.6)",
+              background: "rgba(0,0,0,0.15)",
               zIndex: 1,
             }}
           >
@@ -195,9 +195,9 @@ export function CatModal({ open, onClose, serial, path }: CatModalProps) {
               padding: "8px 10px",
               height: 420,
               overflow: "auto",
-              background: "#f5f5f5",
+              background: "var(--card-bg)",
               borderRadius: 4,
-              border: "1px solid #d9d9d9",
+              border: "1px solid var(--border)",
               fontFamily: "monospace",
               fontSize: 12,
               whiteSpace: "pre-wrap",

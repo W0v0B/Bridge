@@ -298,7 +298,7 @@ export function HdcFileManager() {
             style: {
               cursor: record.is_dir ? "pointer" : "default",
               background:
-                selectedFile?.path === record.path ? "#e6f4ff" : undefined,
+                selectedFile?.path === record.path ? "var(--selected-bg)" : undefined,
             },
           })}
         />
