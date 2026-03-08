@@ -70,13 +70,19 @@ function App() {
       theme={{
         algorithm: appTheme.antdAlgorithm,
         token: {
-          colorPrimary:    appTheme.antdToken.colorPrimary,
+          colorPrimary:     appTheme.antdToken.colorPrimary,
           colorBgContainer: appTheme.antdToken.colorBgContainer,
-          colorBgElevated: appTheme.antdToken.colorBgElevated,
-          colorBgLayout:   appTheme.antdToken.colorBgLayout,
-          colorBorder:     appTheme.antdToken.colorBorder,
-          borderRadius:    appTheme.antdToken.borderRadius,
+          colorBgElevated:  appTheme.antdToken.colorBgElevated,
+          colorBgLayout:    appTheme.antdToken.colorBgLayout,
+          colorBorder:      appTheme.antdToken.colorBorder,
+          borderRadius:     appTheme.antdToken.borderRadius,
         },
+        // In dark themes, button bottom shadows (dangerShadow, defaultShadow,
+        // primaryShadow) use semi-transparent colors that become visible stripes
+        // against coloured dark backgrounds. Disable them for a flat look.
+        components: appTheme.isDark ? {
+          Button: { defaultShadow: "none", primaryShadow: "none", dangerShadow: "none" },
+        } : {},
       }}
     >
       <AntApp style={{ height: "100vh", overflow: "hidden", display: "flex", flexDirection: "column" }}>
