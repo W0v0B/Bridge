@@ -508,37 +508,43 @@ interface ConnectedDevice {
 
 ### 5.1 Persistent Configuration
 
-Stored via `tauri-plugin-store` at `%APPDATA%/Bridge/config.json`.
+Stored in the WebView's `localStorage` via Zustand's `persist` middleware. Two keys are used:
+
+**`bridge-config`** — app-wide settings (`configStore.ts`):
 
 ```jsonc
 {
-  "app": {
-    "theme": "dark",
-    "language": "en-US"
-  },
-  "adb": {
-    "adb_path": "bundled",    // Use bundled adb or a custom path
-    "refresh_interval": 2000
-  },
-  "serial": {
-    "last_port": "COM3",
-    "last_baud_rate": 115200
-  },
-  "quick_commands": [
-    {
-      "id": "uuid-1",
-      "label": "Reset",
-      "command": "AT+RST"
-    }
-  ],
-  "shell": {
-    "max_lines": 5000       // Output buffer limit per device (0 = unlimited)
-  },
-  "logcat": {
-    "max_lines": 5000   // Display buffer limit (0 = unlimited)
+  "theme": "snow",           // ThemeId: snow | dark | rose | arctic | violet | nord
+  "adbPath": "",             // Custom adb binary path (empty = use bundled)
+  "autoConnect": true,
+  "shellMaxLines": 5000,     // Output buffer limit per device (0 = unlimited)
+  "logcatMaxLines": 5000,    // Logcat display buffer limit (0 = unlimited)
+  // Last-used Connect Device values (pre-filled on next open)
+  "adbHost": "192.168.1.100",
+  "adbPort": 5555,
+  "ohosHost": "192.168.1.100",
+  "ohosPort": 5555,
+  "telnetHost": "192.168.1.100",
+  "telnetPort": 23,
+  "baudRate": 115200,
+  // Background image
+  "bgImagePath": null,       // Absolute path to stored image in app-data dir (null = none)
+  "bgOpacity": 0.5           // 0.0–1.0
+}
+```
+
+**`bridge-devices`** — device name overrides (`deviceStore.ts`; only `customNames` is persisted):
+
+```jsonc
+{
+  "customNames": {
+    "192.168.1.50:5555": "My Phone",
+    "COM3": "ESP32 Dev Board"
   }
 }
 ```
+
+Custom names are keyed by device serial / connect-key and are applied automatically when a device is re-detected on startup.
 
 ---
 
@@ -833,7 +839,10 @@ Bundle `adb.exe`, `AdbWinApi.dll`, and `AdbWinUsbApi.dll` inside the app's `reso
 - [x] All UI colors driven by CSS custom properties — cards, logs, file rows, terminal, modals, scrollbars
 - [x] Refresh button moved to sidebar (always visible); titlebar centre is a pure drag region
 - [x] Active device name + model shown in StatusBar bottom-right
-- [ ] Config persistence (tauri-plugin-store)
+- [x] Config persistence via Zustand `persist` middleware (localStorage): theme, connection defaults, shell/logcat limits, background image path + opacity
+- [x] Custom device names persisted across restarts (keyed by serial in `bridge-devices` localStorage entry)
+- [x] Startup splash screen: full-viewport icon overlay with spring animation; background color matched to saved theme before first React paint; fades out after first render
+- [x] Custom background image: choose image → copy to app-data dir → display as base64 data URL; adjustable opacity (0–100%, default 50%); isolated BgLayer component prevents App re-renders on slider drag
 - [ ] Bundle adb.exe into installer
 - [ ] Network ADB connection
 - [ ] Error handling and auto-reconnect
@@ -877,8 +886,9 @@ Bridge/
 │   │   │   ├── Sidebar.tsx     # Left sidebar: unified device list (ADB + serial)
 │   │   │   ├── TitleBar.tsx    # Frameless custom titlebar: full drag region, window controls
 │   │   │   ├── StatusBar.tsx   # Bottom status bar
-│   │   │   ├── ConnectModal.tsx # Dialog for serial/network ADB connection
-│   │   │   └── WelcomePage.tsx  # Welcome screen (shown when no device is selected)
+│   │   │   ├── ConnectModal.tsx  # Dialog for serial/network ADB/OHOS connection (host/port/baud persisted)
+│   │   │   ├── SettingsPanel.tsx # Settings drawer: theme picker + background image + opacity
+│   │   │   └── WelcomePage.tsx   # Welcome screen (shown when no device is selected)
 │   │   ├── adb/
 │   │   │   ├── FileManager.tsx
 │   │   │   ├── CatModal.tsx        # View (cat) modal: text/hex, size limit, auto-refresh
@@ -900,7 +910,8 @@ Bridge/
 │   ├── utils/
 │   │   ├── adb.ts              # invoke wrappers for ADB commands
 │   │   ├── serial.ts           # invoke wrappers for serial commands
-│   │   └── fs.ts               # invoke wrappers for file write/append (backend-side, avoids plugin-fs scope limits)
+│   │   ├── fs.ts               # invoke wrappers for file write/append (backend-side, avoids plugin-fs scope limits)
+│   │   └── background.ts       # invoke wrappers for background image save/load/remove
 │   ├── types/
 │   │   ├── adb.ts              # AdbDevice interface
 │   │   └── device.ts           # ConnectedDevice interface
