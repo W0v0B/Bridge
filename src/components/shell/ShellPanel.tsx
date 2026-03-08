@@ -321,6 +321,7 @@ export function ShellPanel() {
             height: "100%",
             background: "var(--term-bg)",
             borderRadius: 6,
+            border: "1px solid var(--term-border)",
             overflow: "hidden",
           }}
         >
