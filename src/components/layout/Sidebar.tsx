@@ -15,18 +15,19 @@ import type { ConnectedDevice } from "../../types/device";
 const { Text } = Typography;
 
 const stateColors: Record<string, string> = {
-  device: "#52c41a",
-  connected: "#52c41a",
-  offline: "#ff4d4f",
-  unauthorized: "#faad14",
+  device:      "#52c41a",
+  connected:   "#52c41a",
+  offline:     "#ff4d4f",
+  unauthorized:"#faad14",
   authorizing: "#1677ff",
 };
 
 interface SidebarProps {
   onConnect: () => void;
+  onSettings: () => void;
 }
 
-export function Sidebar({ onConnect }: SidebarProps) {
+export function Sidebar({ onConnect, onSettings }: SidebarProps) {
   const devices = useDeviceStore((s) => s.devices);
   const selectedDeviceId = useDeviceStore((s) => s.selectedDeviceId);
   const selectDevice = useDeviceStore((s) => s.selectDevice);
@@ -47,8 +48,6 @@ export function Sidebar({ onConnect }: SidebarProps) {
         await closePort(device.serial);
         removeDevice(device.id);
       } else {
-        // OHOS devices are removed from list when disconnected physically;
-        // no explicit disconnect command needed.
         removeDevice(device.id);
       }
     } catch {
@@ -75,7 +74,7 @@ export function Sidebar({ onConnect }: SidebarProps) {
           padding: "6px 12px",
           cursor: "pointer",
           borderRadius: 6,
-          background: isSelected ? "#e6f4ff" : "transparent",
+          background: isSelected ? "var(--selected-bg)" : "transparent",
           marginBottom: 2,
         }}
       >
@@ -93,7 +92,7 @@ export function Sidebar({ onConnect }: SidebarProps) {
           style={{
             flex: 1,
             fontSize: 13,
-            color: isSelected ? "#1677ff" : undefined,
+            color: isSelected ? "var(--accent)" : undefined,
           }}
         >
           {device.name}
@@ -101,7 +100,7 @@ export function Sidebar({ onConnect }: SidebarProps) {
         {canDisconnect ? (
           <Tooltip title="Disconnect">
             <DisconnectOutlined
-              style={{ fontSize: 12, color: "#8c8c8c" }}
+              style={{ fontSize: 12, color: "var(--text-secondary)" }}
               onClick={(e) => {
                 e.stopPropagation();
                 handleDisconnect(device);
@@ -125,7 +124,7 @@ export function Sidebar({ onConnect }: SidebarProps) {
           alignItems: "center",
           gap: 6,
           padding: "4px 12px",
-          color: "#8c8c8c",
+          color: "var(--text-secondary)",
           fontSize: 12,
           fontWeight: 600,
           textTransform: "uppercase",
@@ -201,10 +200,16 @@ export function Sidebar({ onConnect }: SidebarProps) {
       <div
         style={{
           padding: "8px 12px",
-          borderTop: "1px solid #f0f0f0",
+          borderTop: "1px solid var(--border)",
         }}
       >
-        <Button type="text" icon={<SettingOutlined />} block style={{ textAlign: "left" }}>
+        <Button
+          type="text"
+          icon={<SettingOutlined />}
+          block
+          style={{ textAlign: "left" }}
+          onClick={onSettings}
+        >
           Settings
         </Button>
       </div>

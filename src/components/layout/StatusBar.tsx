@@ -16,9 +16,9 @@ export function StatusBar() {
     <Footer
       style={{
         padding: "8px 16px",
-      minHeight: 49,
-        background: "#fff",
-        borderTop: "1px solid #f0f0f0",
+        minHeight: 49,
+        background: "var(--content-bg)",
+        borderTop: "1px solid var(--border)",
         display: "flex",
         alignItems: "center",
         gap: 12,
@@ -27,14 +27,14 @@ export function StatusBar() {
       <Tag color={total > 0 ? "green" : "default"}>
         {total > 0 ? "Connected" : "No Devices"}
       </Tag>
-      <span style={{ color: "#8c8c8c", fontSize: 12 }}>
+      <span style={{ color: "var(--text-secondary)", fontSize: 12 }}>
         {adbCount > 0 && `ADB: ${adbCount}`}
         {adbCount > 0 && serialCount > 0 && " · "}
         {serialCount > 0 && `Serial: ${serialCount}`}
         {total === 0 && "Connect a device to get started"}
       </span>
       {selectedDevice && (
-        <span style={{ marginLeft: "auto", color: "#8c8c8c", fontSize: 12 }}>
+        <span style={{ marginLeft: "auto", color: "var(--text-secondary)", fontSize: 12 }}>
           Active: {selectedDevice.name}
         </span>
       )}

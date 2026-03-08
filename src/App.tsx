@@ -1,8 +1,9 @@
-import { useState } from "react";
-import { App as AntApp, ConfigProvider, Layout, Tabs, theme } from "antd";
+import { useEffect, useState } from "react";
+import { App as AntApp, ConfigProvider, Layout, Tabs } from "antd";
 import { Sidebar } from "./components/layout/Sidebar";
 import { TitleBar } from "./components/layout/TitleBar";
 import { StatusBar } from "./components/layout/StatusBar";
+import { SettingsPanel } from "./components/layout/SettingsPanel";
 import { ConnectModal } from "./components/layout/ConnectModal";
 import { WelcomePage } from "./components/layout/WelcomePage";
 import { FileManager } from "./components/adb/FileManager";
@@ -17,6 +18,8 @@ import { useDeviceEvents } from "./hooks/useAdbEvents";
 import { useOhosDeviceEvents } from "./hooks/useHdcEvents";
 import { useSerialDisconnect } from "./hooks/useSerialEvents";
 import { useDeviceStore } from "./store/deviceStore";
+import { useConfigStore } from "./store/configStore";
+import { THEMES } from "./theme";
 
 const { Content, Sider } = Layout;
 
@@ -44,104 +47,129 @@ function App() {
   useDeviceEvents();
   useOhosDeviceEvents();
   useSerialDisconnect();
+
   const [connectModalOpen, setConnectModalOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const selectedDeviceId = useDeviceStore((s) => s.selectedDeviceId);
   const devices = useDeviceStore((s) => s.devices);
   const selectedDevice = devices.find((d) => d.id === selectedDeviceId);
   const deviceType = selectedDevice?.type;
 
+  const themeId = useConfigStore((s) => s.config.theme);
+  const appTheme = THEMES[themeId];
+
+  // Apply CSS variables whenever theme changes
+  useEffect(() => {
+    const root = document.documentElement;
+    Object.entries(appTheme.css).forEach(([k, v]) => root.style.setProperty(k, v));
+  }, [appTheme]);
+
   return (
     <ConfigProvider
       theme={{
-        algorithm: theme.defaultAlgorithm,
-        token: { colorBgContainer: "#fff", borderRadius: 6 },
+        algorithm: appTheme.antdAlgorithm,
+        token: {
+          colorPrimary:    appTheme.antdToken.colorPrimary,
+          colorBgContainer: appTheme.antdToken.colorBgContainer,
+          colorBgLayout:   appTheme.antdToken.colorBgLayout,
+          colorBorder:     appTheme.antdToken.colorBorder,
+          borderRadius:    appTheme.antdToken.borderRadius,
+        },
       }}
     >
       <AntApp style={{ height: "100vh", overflow: "hidden", display: "flex", flexDirection: "column" }}>
         <TitleBar />
         <Layout style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
-        <Sider width={200} style={{ background: "#fff" }}>
-          <Sidebar onConnect={() => setConnectModalOpen(true)} />
-        </Sider>
-        <Layout style={{ minHeight: 0 }}>
-          <Content
-            style={{
-              overflow: "hidden",
-              flex: 1,
-              minHeight: 0,
-              display: "flex",
-              flexDirection: "column",
-            }}
-          >
-            {/* Welcome page — rendered only when no device is selected */}
-            {!selectedDevice && <WelcomePage />}
-
-            {/*
-              All three tab containers are always mounted once their device type has
-              appeared. CSS display:none hides the inactive ones without unmounting,
-              preserving all panel state across device-type switches.
-              destroyOnHidden={false} keeps individual tab panels alive.
-            */}
-            <div
+          <Sider width={200} style={{ background: "var(--sidebar-bg)" }}>
+            <Sidebar
+              onConnect={() => setConnectModalOpen(true)}
+              onSettings={() => setSettingsOpen(true)}
+            />
+          </Sider>
+          <Layout style={{ minHeight: 0, background: "var(--content-bg)" }}>
+            <Content
               style={{
-                display: deviceType === "adb" ? "flex" : "none",
+                overflow: "hidden",
                 flex: 1,
                 minHeight: 0,
-                padding: 16,
+                display: "flex",
                 flexDirection: "column",
+                background: "var(--content-bg)",
               }}
             >
-              <Tabs
-                items={adbTabs}
-                destroyOnHidden={false}
-                style={{ flex: 1 }}
-                tabBarStyle={{ marginBottom: 12 }}
-              />
-            </div>
+              {/* Welcome page — rendered only when no device is selected */}
+              {!selectedDevice && <WelcomePage />}
 
-            <div
-              style={{
-                display: deviceType === "serial" ? "flex" : "none",
-                flex: 1,
-                minHeight: 0,
-                padding: 16,
-                flexDirection: "column",
-              }}
-            >
-              <Tabs
-                items={serialTabs}
-                destroyOnHidden={false}
-                style={{ flex: 1 }}
-                tabBarStyle={{ marginBottom: 12 }}
-              />
-            </div>
+              {/*
+                All three tab containers are always mounted once their device type has
+                appeared. CSS display:none hides the inactive ones without unmounting,
+                preserving all panel state across device-type switches.
+                destroyOnHidden={false} keeps individual tab panels alive.
+              */}
+              <div
+                style={{
+                  display: deviceType === "adb" ? "flex" : "none",
+                  flex: 1,
+                  minHeight: 0,
+                  padding: 16,
+                  flexDirection: "column",
+                }}
+              >
+                <Tabs
+                  items={adbTabs}
+                  destroyOnHidden={false}
+                  style={{ flex: 1 }}
+                  tabBarStyle={{ marginBottom: 12 }}
+                />
+              </div>
 
-            <div
-              style={{
-                display: deviceType === "ohos" ? "flex" : "none",
-                flex: 1,
-                minHeight: 0,
-                padding: 16,
-                flexDirection: "column",
-              }}
-            >
-              <Tabs
-                items={ohosTabs}
-                destroyOnHidden={false}
-                style={{ flex: 1 }}
-                tabBarStyle={{ marginBottom: 12 }}
-              />
-            </div>
-          </Content>
-          <TransferQueue />
-          <StatusBar />
+              <div
+                style={{
+                  display: deviceType === "serial" ? "flex" : "none",
+                  flex: 1,
+                  minHeight: 0,
+                  padding: 16,
+                  flexDirection: "column",
+                }}
+              >
+                <Tabs
+                  items={serialTabs}
+                  destroyOnHidden={false}
+                  style={{ flex: 1 }}
+                  tabBarStyle={{ marginBottom: 12 }}
+                />
+              </div>
+
+              <div
+                style={{
+                  display: deviceType === "ohos" ? "flex" : "none",
+                  flex: 1,
+                  minHeight: 0,
+                  padding: 16,
+                  flexDirection: "column",
+                }}
+              >
+                <Tabs
+                  items={ohosTabs}
+                  destroyOnHidden={false}
+                  style={{ flex: 1 }}
+                  tabBarStyle={{ marginBottom: 12 }}
+                />
+              </div>
+            </Content>
+            <TransferQueue />
+            <StatusBar />
+          </Layout>
         </Layout>
-        </Layout>
-      <ConnectModal
-        open={connectModalOpen}
-        onClose={() => setConnectModalOpen(false)}
-      />
+        <ConnectModal
+          open={connectModalOpen}
+          onClose={() => setConnectModalOpen(false)}
+        />
+        <SettingsPanel
+          open={settingsOpen}
+          onClose={() => setSettingsOpen(false)}
+        />
       </AntApp>
     </ConfigProvider>
   );

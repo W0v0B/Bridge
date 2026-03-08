@@ -1,19 +1,23 @@
 /* ── Theme tokens ────────────────────────────────────────────
-   All colour values live here. To add a new theme: define a
-   [data-theme="name"] block that overrides these variables and
-   pass the same values to Ant Design's ConfigProvider tokens.
+   CSS variables are set programmatically in App.tsx via useEffect
+   whenever the theme changes. The :root block below is the Snow
+   (light) default — it is immediately overwritten on mount.
 ───────────────────────────────────────────────────────────── */
 :root {
-  --tb-bg:               #ffffff;   /* titlebar / sidebar / content background */
-  --border:              #f0f0f0;   /* all dividing lines */
-  --accent:              #1677ff;   /* primary blue */
-  --accent-hover:        #4096ff;
-  --text-primary:        rgba(0, 0, 0, 0.88);
-  --text-secondary:      #8c8c8c;
-  --selected-bg:         #e6f4ff;   /* selected device row */
-  --wc-hover:            rgba(0, 0, 0, 0.06); /* min/max button hover */
-  --wc-close-hover:      #e81123;   /* close button hover — Windows standard */
-  --wc-close-hover-text: #ffffff;
+  --tb-bg:                 #ffffff;   /* titlebar background */
+  --sidebar-bg:            #ffffff;   /* sidebar background */
+  --content-bg:            #ffffff;   /* main content background */
+  --border:                #f0f0f0;   /* all dividing lines */
+  --accent:                #1677ff;   /* primary color */
+  --accent-hover:          #4096ff;
+  --text-primary:          rgba(0, 0, 0, 0.88);
+  --text-secondary:        #8c8c8c;
+  --selected-bg:           #e6f4ff;   /* selected device row */
+  --wc-hover:              rgba(0, 0, 0, 0.06); /* min/max button hover */
+  --wc-close-hover:        #e81123;   /* close button hover */
+  --wc-close-hover-text:   #ffffff;
+  --scrollbar-thumb:       #d9d9d9;
+  --scrollbar-thumb-hover: #bfbfbf;
 }
 
 html, body {
@@ -22,7 +26,7 @@ html, body {
   overflow: hidden;
 }
 
-/* Slim scrollbar */
+/* Slim scrollbar — colors driven by theme tokens */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -33,12 +37,12 @@ html, body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #d9d9d9;
+  background: var(--scrollbar-thumb);
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #bfbfbf;
+  background: var(--scrollbar-thumb-hover);
 }
 
 /* Ensure Tabs fill available height */

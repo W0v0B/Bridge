@@ -1,8 +1,9 @@
 import { create } from "zustand";
+import type { ThemeId } from "../theme";
 
 interface Config {
   adbPath: string;
-  theme: "dark" | "light";
+  theme: ThemeId;
   autoConnect: boolean;
   shellMaxLines: number;
   logcatMaxLines: number;
@@ -16,7 +17,7 @@ interface ConfigState {
 export const useConfigStore = create<ConfigState>((set) => ({
   config: {
     adbPath: "",
-    theme: "dark",
+    theme: "snow",
     autoConnect: true,
     shellMaxLines: 5000,
     logcatMaxLines: 5000,
