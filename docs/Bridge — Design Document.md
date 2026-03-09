@@ -150,13 +150,13 @@ tokio Runtime
 │
 ├── Task: adb_device_watcher     # Polls `adb devices` every 2s; emits on change
 ├── Task: adb_root_remount       # Attempts root + remount once per device per session
-├── Task: logcat_reader          # Streams adb logcat stdout; emits batches of parsed LogEntry
+├── Task: logcat_reader          # Streams adb logcat stdout; emits LogcatBatch { serial, entries }
 ├── Task: shell_stream_reader    # Streams adb shell stdout+stderr; emits shell_output/shell_exit
 ├── Task: file_transfer          # Streams push/pull progress; emits transfer_progress
 │
 ├── Task: hdc_device_watcher     # Polls `hdc list targets` + `-v` every 2s; cross-references to filter phantoms
 ├── Task: hdc_remount            # Runs `hdc target mount` once per device per session
-├── Task: hilog_reader           # Streams HiLog output; emits batches of parsed HilogEntry
+├── Task: hilog_reader           # Streams HiLog output; emits HilogBatch { connect_key, entries }
 ├── Task: hdc_shell_stream       # Streams hdc shell output; emits hdc_shell_output/hdc_shell_exit
 ├── Task: hdc_bundle_resolver    # Parallel bm dump -n calls via JoinSet for App Manager
 
@@ -269,7 +269,7 @@ interface TransferProgress {
 async fn start_logcat(serial: String, filter: LogcatFilter, app: AppHandle) -> Result<(), String>
 // Spawns `adb -s {serial} logcat -v threadtime`
 // Parses stdout using a lenient regex that handles both `MM-DD` and `YYYY-MM-DD` timestamp prefixes
-// Batches parsed entries: emits("logcat_lines", Vec<LogEntry>) every 50ms or per 64 entries
+// Batches parsed entries: emits("logcat_lines", LogcatBatch { serial, entries }) every 50ms or per 64 entries
 
 #[tauri::command]
 async fn stop_logcat(serial: String) -> Result<(), String>
@@ -278,7 +278,8 @@ async fn stop_logcat(serial: String) -> Result<(), String>
 #[tauri::command]
 async fn start_tlogcat(serial: String, app: AppHandle) -> Result<(), String>
 // Spawns `adb -s {serial} shell tlogcat`
-// Same batched-emit model; emits("tlogcat_lines", Vec<LogEntry>)
+// Same batched-emit model; emits("tlogcat_lines", LogcatBatch { serial, entries })
+// Also pipes stderr — stderr lines are emitted as error-level entries (tag: "tlogcat-stderr")
 
 #[tauri::command]
 async fn stop_tlogcat(serial: String) -> Result<(), String>

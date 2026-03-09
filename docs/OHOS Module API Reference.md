@@ -91,7 +91,7 @@ interface FileEntry {
 
 ### `HilogEntry`
 
-Represents one parsed HiLog line. Used in `hilog_lines` events and in `export_hilog`.
+Represents one parsed HiLog line. Used in `HilogBatch` payloads and in `export_hilog`.
 
 ```typescript
 interface HilogEntry {
@@ -101,6 +101,19 @@ interface HilogEntry {
   level: string;     // "D" | "I" | "W" | "E" | "F"
   tag: string;       // "DOMAIN/Tag" format, e.g. "A03200/testTag"
   message: string;   // Log message body
+}
+```
+
+---
+
+### `HilogBatch`
+
+Wrapper emitted by `hilog_lines` events. Associates a batch of log entries with the device that produced them.
+
+```typescript
+interface HilogBatch {
+  connect_key: string;     // Device connect_key this batch belongs to
+  entries: HilogEntry[];   // 1 to 64 parsed log entries
 }
 ```
 
@@ -661,10 +674,10 @@ listen("hdc_shell_exit", (event: { payload: HdcShellExit }) => { ... })
 Emitted by `start_hilog` in batches of parsed log entries.
 
 ```typescript
-listen("hilog_lines", (event: { payload: HilogEntry[] }) => { ... })
+listen("hilog_lines", (event: { payload: HilogBatch }) => { ... })
 ```
 
-**Payload**: `HilogEntry[]` — 1 to 64 entries per batch.
+**Payload**: `HilogBatch { connect_key, entries }` — `entries` contains 1 to 64 entries per batch.
 
 **Notes**: Only entries passing the `HilogFilter` supplied to `start_hilog` are included. The batch is flushed at 64 entries or 50 ms, whichever comes first.
 

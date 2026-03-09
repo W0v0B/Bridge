@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useDeviceStore } from "../store/deviceStore";
 import { getOhosDevices } from "../utils/hdc";
-import type { OhosDevice, HilogEntry } from "../types/hdc";
+import type { OhosDevice, HilogBatch } from "../types/hdc";
 
 export function useOhosDeviceEvents() {
   const syncOhosDevices = useDeviceStore((s) => s.syncOhosDevices);
@@ -60,12 +60,12 @@ export function useHdcShellExit(callback: (event: HdcShellExitEvent) => void) {
   }, []);
 }
 
-export function useHilogEvents(onBatch: (entries: HilogEntry[]) => void) {
+export function useHilogEvents(onBatch: (batch: HilogBatch) => void) {
   const callbackRef = useRef(onBatch);
   callbackRef.current = onBatch;
 
   useEffect(() => {
-    const unlisten = listen<HilogEntry[]>("hilog_lines", (event) => {
+    const unlisten = listen<HilogBatch>("hilog_lines", (event) => {
       callbackRef.current(event.payload);
     });
     return () => {

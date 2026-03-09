@@ -21,6 +21,11 @@ export interface HilogFilter {
   keyword: string | null;
 }
 
+export interface HilogBatch {
+  connect_key: string;
+  entries: HilogEntry[];
+}
+
 export interface BundleInfo {
   bundle_name: string;
   code_path: string;

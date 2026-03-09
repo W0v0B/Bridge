@@ -115,7 +115,7 @@ interface TransferProgress {
 
 ### `LogEntry`
 
-Represents one parsed log line. Used in `logcat_lines` and `tlogcat_lines` events and in `export_logs`.
+Represents one parsed log line. Used in `LogcatBatch` payloads and in `export_logs`.
 
 ```typescript
 interface LogEntry {
@@ -125,6 +125,19 @@ interface LogEntry {
   level: string;     // "V" | "D" | "I" | "W" | "E" | "F"
   tag: string;       // Log tag, e.g. "ActivityManager"
   message: string;   // Log message body
+}
+```
+
+---
+
+### `LogcatBatch`
+
+Wrapper emitted by `logcat_lines` and `tlogcat_lines` events. Associates a batch of log entries with the device that produced them.
+
+```typescript
+interface LogcatBatch {
+  serial: string;        // Device serial this batch belongs to
+  entries: LogEntry[];   // 1 to 64 parsed log entries
 }
 ```
 
@@ -521,6 +534,7 @@ invoke("start_tlogcat", { serial: string }): Promise<void>
 **Implementation**:
 - Runs `adb -s {serial} shell tlogcat`.
 - Parsing is more permissive than logcat — tries threadtime regex first, then brief format (`L/Tag(PID): message`), then falls back to treating the entire line as an `INFO` message with an empty tag. This ensures no lines are silently dropped.
+- Stderr is also piped and read in a separate tokio task. Stderr lines are emitted as error-level (`"E"`) entries with the tag `"tlogcat-stderr"`, so that tlogcat error messages (e.g. command not found, permission denied) appear in the log stream.
 - No filter is applied (tlogcat does not support server-side level filtering).
 - Same 64-entry / 50ms batch model as `start_logcat`.
 - PID stored in `LOGCAT_PROCESSES` keyed by `"tlogcat:{serial}"`.
@@ -791,10 +805,10 @@ listen("shell_exit", (event: { payload: ShellExit }) => { ... })
 Emitted by `start_logcat` in batches of parsed log entries.
 
 ```typescript
-listen("logcat_lines", (event: { payload: LogEntry[] }) => { ... })
+listen("logcat_lines", (event: { payload: LogcatBatch }) => { ... })
 ```
 
-**Payload**: `LogEntry[]` — 1 to 64 entries per batch.
+**Payload**: `LogcatBatch { serial, entries }` — `entries` contains 1 to 64 entries per batch.
 
 **Notes**: Only entries that pass the `LogcatFilter` supplied to `start_logcat` are included. The batch is flushed when it reaches 64 entries or 50ms have elapsed, whichever comes first.
 
@@ -805,10 +819,12 @@ listen("logcat_lines", (event: { payload: LogEntry[] }) => { ... })
 Emitted by `start_tlogcat` in batches. Same semantics as `logcat_lines` but with no server-side level filtering.
 
 ```typescript
-listen("tlogcat_lines", (event: { payload: LogEntry[] }) => { ... })
+listen("tlogcat_lines", (event: { payload: LogcatBatch }) => { ... })
 ```
 
-**Payload**: `LogEntry[]`
+**Payload**: `LogcatBatch { serial, entries }`
+
+**Notes**: In addition to stdout, tlogcat also pipes stderr. Any stderr lines are emitted as error-level (`"E"`) entries with the tag `"tlogcat-stderr"`, ensuring that tlogcat error messages (e.g. command-not-found, permission denied) are surfaced in the log stream rather than silently lost.
 
 ---
 

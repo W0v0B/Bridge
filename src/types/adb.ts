@@ -43,6 +43,11 @@ export interface LogcatFilter {
   keyword: string | null;
 }
 
+export interface LogcatBatch {
+  serial: string;
+  entries: LogEntry[];
+}
+
 export interface PackageInfo {
   package_name: string;
   apk_path: string;

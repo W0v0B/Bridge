@@ -24,6 +24,13 @@ pub struct HilogEntry {
     pub message: String,
 }
 
+/// Wrapper for emitting hilog batches with device connect_key info.
+#[derive(Debug, Clone, Serialize)]
+pub struct HilogBatch {
+    pub connect_key: String,
+    pub entries: Vec<HilogEntry>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct HilogFilter {
     pub level: Option<String>,
@@ -128,7 +135,10 @@ pub async fn start(
                         }
                         if batch.len() >= 64 || last_flush.elapsed() >= flush_interval {
                             if !batch.is_empty() {
-                                let _ = app.emit("hilog_lines", &batch);
+                                let _ = app.emit("hilog_lines", HilogBatch {
+                                    connect_key: connect_key_owned.clone(),
+                                    entries: batch.clone(),
+                                });
                                 batch.clear();
                             }
                             last_flush = Instant::now();
@@ -136,20 +146,29 @@ pub async fn start(
                     }
                     Ok(Ok(None)) => {
                         if !batch.is_empty() {
-                            let _ = app.emit("hilog_lines", &batch);
+                            let _ = app.emit("hilog_lines", HilogBatch {
+                                connect_key: connect_key_owned.clone(),
+                                entries: batch.clone(),
+                            });
                         }
                         break;
                     }
                     Ok(Err(_)) => {
                         if !batch.is_empty() {
-                            let _ = app.emit("hilog_lines", &batch);
+                            let _ = app.emit("hilog_lines", HilogBatch {
+                                connect_key: connect_key_owned.clone(),
+                                entries: batch.clone(),
+                            });
                         }
                         break;
                     }
                     Err(_) => {
                         // Timeout — flush partial batch
                         if !batch.is_empty() {
-                            let _ = app.emit("hilog_lines", &batch);
+                            let _ = app.emit("hilog_lines", HilogBatch {
+                                connect_key: connect_key_owned.clone(),
+                                entries: batch.clone(),
+                            });
                             batch.clear();
                             last_flush = Instant::now();
                         }

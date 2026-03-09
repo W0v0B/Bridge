@@ -22,6 +22,13 @@ pub struct LogEntry {
     pub message: String,
 }
 
+/// Wrapper for emitting log batches with device serial info.
+#[derive(Debug, Clone, Serialize)]
+pub struct LogcatBatch {
+    pub serial: String,
+    pub entries: Vec<LogEntry>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct LogcatFilter {
     pub level: Option<String>,
@@ -176,7 +183,10 @@ pub async fn start(
                         // Flush when batch is large enough or interval elapsed
                         if batch.len() >= 64 || last_flush.elapsed() >= flush_interval {
                             if !batch.is_empty() {
-                                let _ = app.emit("logcat_lines", &batch);
+                                let _ = app.emit("logcat_lines", LogcatBatch {
+                                    serial: serial_owned.clone(),
+                                    entries: batch.clone(),
+                                });
                                 batch.clear();
                             }
                             last_flush = Instant::now();
@@ -185,20 +195,29 @@ pub async fn start(
                     Ok(Ok(None)) => {
                         // EOF
                         if !batch.is_empty() {
-                            let _ = app.emit("logcat_lines", &batch);
+                            let _ = app.emit("logcat_lines", LogcatBatch {
+                                serial: serial_owned.clone(),
+                                entries: batch.clone(),
+                            });
                         }
                         break;
                     }
                     Ok(Err(_)) => {
                         if !batch.is_empty() {
-                            let _ = app.emit("logcat_lines", &batch);
+                            let _ = app.emit("logcat_lines", LogcatBatch {
+                                serial: serial_owned.clone(),
+                                entries: batch.clone(),
+                            });
                         }
                         break;
                     }
                     Err(_) => {
                         // Timeout — flush whatever we have
                         if !batch.is_empty() {
-                            let _ = app.emit("logcat_lines", &batch);
+                            let _ = app.emit("logcat_lines", LogcatBatch {
+                                serial: serial_owned.clone(),
+                                entries: batch.clone(),
+                            });
                             batch.clear();
                             last_flush = Instant::now();
                         }
@@ -252,7 +271,7 @@ pub async fn start_tlogcat(
     let mut child = cmd(adb_path())
         .args(["-s", serial, "shell", "tlogcat"])
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
         .spawn()
         .map_err(|e| format!("Failed to start tlogcat: {}", e))?;
 
@@ -264,6 +283,34 @@ pub async fn start_tlogcat(
     }
 
     let serial_owned = serial.to_string();
+
+    // Spawn a task to read stderr and emit as error-level log entries
+    if let Some(stderr) = child.stderr.take() {
+        let stderr_serial = serial_owned.clone();
+        let stderr_app = app.clone();
+        tokio::spawn(async move {
+            let reader = BufReader::new(stderr);
+            let mut lines = reader.lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                let entry = LogEntry {
+                    timestamp: String::new(),
+                    pid: String::new(),
+                    tid: String::new(),
+                    level: "E".to_string(),
+                    tag: "tlogcat".to_string(),
+                    message: trimmed.to_string(),
+                };
+                let _ = stderr_app.emit("tlogcat_lines", LogcatBatch {
+                    serial: stderr_serial.clone(),
+                    entries: vec![entry],
+                });
+            }
+        });
+    }
 
     tokio::spawn(async move {
         if let Some(stdout) = child.stdout.take() {
@@ -283,7 +330,10 @@ pub async fn start_tlogcat(
                         }
                         if batch.len() >= 64 || last_flush.elapsed() >= flush_interval {
                             if !batch.is_empty() {
-                                let _ = app.emit("tlogcat_lines", &batch);
+                                let _ = app.emit("tlogcat_lines", LogcatBatch {
+                                    serial: serial_owned.clone(),
+                                    entries: batch.clone(),
+                                });
                                 batch.clear();
                             }
                             last_flush = Instant::now();
@@ -291,19 +341,28 @@ pub async fn start_tlogcat(
                     }
                     Ok(Ok(None)) => {
                         if !batch.is_empty() {
-                            let _ = app.emit("tlogcat_lines", &batch);
+                            let _ = app.emit("tlogcat_lines", LogcatBatch {
+                                serial: serial_owned.clone(),
+                                entries: batch.clone(),
+                            });
                         }
                         break;
                     }
                     Ok(Err(_)) => {
                         if !batch.is_empty() {
-                            let _ = app.emit("tlogcat_lines", &batch);
+                            let _ = app.emit("tlogcat_lines", LogcatBatch {
+                                serial: serial_owned.clone(),
+                                entries: batch.clone(),
+                            });
                         }
                         break;
                     }
                     Err(_) => {
                         if !batch.is_empty() {
-                            let _ = app.emit("tlogcat_lines", &batch);
+                            let _ = app.emit("tlogcat_lines", LogcatBatch {
+                                serial: serial_owned.clone(),
+                                entries: batch.clone(),
+                            });
                             batch.clear();
                             last_flush = Instant::now();
                         }

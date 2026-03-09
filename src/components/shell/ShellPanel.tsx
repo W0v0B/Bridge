@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { App, Input, Button, InputNumber, Tooltip, Typography } from "antd";
 import {
   StopOutlined, ClearOutlined, SettingOutlined,
-  DownloadOutlined, FileAddOutlined,
+  DownloadOutlined, FileAddOutlined, BgColorsOutlined,
 } from "@ant-design/icons";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeTextFileTo, appendTextToFile } from "../../utils/fs";
@@ -16,6 +16,7 @@ import { useSerialData } from "../../hooks/useSerialEvents";
 import { useShellOutput, useShellExit } from "../../hooks/useShellEvents";
 import { useHdcShellOutput, useHdcShellExit } from "../../hooks/useHdcEvents";
 import { QuickCommandsPanel } from "./QuickCommandsPanel";
+import { ansiToHtml, stripAnsi } from "../../utils/ansi";
 
 const { Text } = Typography;
 
@@ -37,6 +38,8 @@ export function ShellPanel() {
   const [running, setRunning] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [logToFile, setLogToFile] = useState(false);
+  const [ansiColor, setAnsiColor] = useState(true);
+  const ansiColorMap = useRef<Record<string, boolean>>({});
 
   const outputRef = useRef<HTMLDivElement>(null);
   const rafId = useRef<number>(0);
@@ -63,6 +66,7 @@ export function ShellPanel() {
       setInput(inputMap.current[selectedDeviceId] ?? "");
       setRunning(runningMap.current[selectedDeviceId] ?? false);
       setLogToFile(!!logFileMap.current[selectedDeviceId]);
+      setAnsiColor(ansiColorMap.current[selectedDeviceId] ?? true);
     }
   }, [selectedDeviceId]);
 
@@ -364,6 +368,18 @@ export function ShellPanel() {
                 <Text style={{ color: "var(--term-text)", fontSize: 10, opacity: 0.5 }}>0=unlimited</Text>
               </div>
             )}
+            <Tooltip title={ansiColor ? "ANSI colors enabled — click to disable" : "ANSI colors disabled — click to enable"}>
+              <Button
+                size="small"
+                type="text"
+                icon={<BgColorsOutlined style={{ color: ansiColor ? "#52c41a" : "#999" }} />}
+                onClick={() => {
+                  const next = !ansiColor;
+                  setAnsiColor(next);
+                  if (selectedDeviceId) ansiColorMap.current[selectedDeviceId] = next;
+                }}
+              />
+            </Tooltip>
             <Tooltip title="Export snapshot">
               <Button
                 size="small"
@@ -412,9 +428,11 @@ export function ShellPanel() {
               whiteSpace: "pre-wrap",
               wordBreak: "break-all",
             }}
-          >
-            {output || `Connected to ${selectedDevice.name}\nType a command below.\n`}
-          </div>
+            {...(ansiColor
+              ? { dangerouslySetInnerHTML: { __html: output ? ansiToHtml(output) : `Connected to ${selectedDevice.name}\nType a command below.\n` } }
+              : { children: output ? stripAnsi(output) : `Connected to ${selectedDevice.name}\nType a command below.\n` }
+            )}
+          />
 
           {/* Input */}
           <div

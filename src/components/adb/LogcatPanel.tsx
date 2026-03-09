@@ -28,7 +28,7 @@ import {
   clearDeviceLog,
   exportLogs,
 } from "../../utils/adb";
-import type { LogEntry, LogcatFilter } from "../../types/adb";
+import type { LogEntry, LogcatFilter, LogcatBatch } from "../../types/adb";
 
 // CSS class names for log levels
 const levelClassMap: Record<string, string> = {
@@ -71,13 +71,15 @@ export function LogcatPanel() {
   const setConfig = useConfigStore((s) => s.setConfig);
 
   const [mode, setMode] = useState<"logcat" | "tlogcat">("logcat");
-  // Per-mode running state — each mode runs independently
-  const [runningMap, setRunningMap] = useState<Record<string, boolean>>({ logcat: false, tlogcat: false });
-  const runningMapRef = useRef<Record<string, boolean>>({ logcat: false, tlogcat: false });
-  const running = runningMap[mode] ?? false;
+  // Per-device-per-mode running state: "serial:mode" → boolean
+  const [runningMap, setRunningMap] = useState<Record<string, boolean>>({});
+  const runningMapRef = useRef<Record<string, boolean>>({});
+  const runningKey = selectedDevice ? `${selectedDevice}:${mode}` : mode;
+  const running = runningMap[runningKey] ?? false;
 
-  const setModeRunning = (m: string, val: boolean) => {
-    runningMapRef.current = { ...runningMapRef.current, [m]: val };
+  const setModeRunning = (m: string, val: boolean, serial?: string) => {
+    const key = serial ? `${serial}:${m}` : m;
+    runningMapRef.current = { ...runningMapRef.current, [key]: val };
     setRunningMap({ ...runningMapRef.current });
   };
   const [level, setLevel] = useState<string>("All");
@@ -88,14 +90,22 @@ export function LogcatPanel() {
   const [caseSensitive, setCaseSensitive] = useState(false);
   const [exactMatch, setExactMatch] = useState(false);
 
-  // Per-mode log buffers — survives mode switches
-  const buffers = useRef<Record<string, ModeBuffer>>({
-    logcat: { entries: [], html: "" },
-    tlogcat: { entries: [], html: "" },
-  });
+  // Per-device-per-mode log buffers — keyed by "serial:mode", survives device/mode switches
+  const buffers = useRef<Record<string, ModeBuffer>>({});
 
-  // Active buffer shortcut (always points to current mode's buffer)
-  const getBuffer = useCallback(() => buffers.current[mode], [mode]);
+  const getOrCreateBuffer = useCallback((serial: string, m: string): ModeBuffer => {
+    const key = `${serial}:${m}`;
+    if (!buffers.current[key]) {
+      buffers.current[key] = { entries: [], html: "" };
+    }
+    return buffers.current[key];
+  }, []);
+
+  // Active buffer shortcut (current device + current mode)
+  const getBuffer = useCallback(() => {
+    if (!selectedDevice) return { entries: [], html: "" } as ModeBuffer;
+    return getOrCreateBuffer(selectedDevice, mode);
+  }, [selectedDevice, mode, getOrCreateBuffer]);
 
   const [entryCount, setEntryCount] = useState(0);
 
@@ -115,9 +125,16 @@ export function LogcatPanel() {
   // Track whether DOM is stale (user was scrolling when new data arrived)
   const domStale = useRef(false);
 
+  const selectedDeviceRef = useRef(selectedDevice);
+  selectedDeviceRef.current = selectedDevice;
+
   /** Write buffer HTML to DOM. Always safe to call. */
   const flushToDOM = useCallback(() => {
-    const buf = buffers.current[modeRef.current];
+    const serial = selectedDeviceRef.current;
+    if (!serial) return;
+    const key = `${serial}:${modeRef.current}`;
+    const buf = buffers.current[key];
+    if (!buf) return;
     if (contentRef.current) {
       contentRef.current.innerHTML = buf.html;
     }
@@ -259,19 +276,23 @@ export function LogcatPanel() {
     [passesFilter, trimHtml]
   );
 
-  // Add a batch of entries to a specific mode's buffer
+  // Add a batch of entries to a specific device+mode buffer
   const addEntries = useCallback(
-    (targetMode: "logcat" | "tlogcat", batch: LogEntry[]) => {
+    (serial: string, targetMode: "logcat" | "tlogcat", batch: LogEntry[]) => {
       const max = maxLinesRef.current;
-      const buf = buffers.current[targetMode];
+      const key = `${serial}:${targetMode}`;
+      if (!buffers.current[key]) {
+        buffers.current[key] = { entries: [], html: "" };
+      }
+      const buf = buffers.current[key];
 
       buf.entries.push(...batch);
       if (max > 0 && buf.entries.length > max) {
         buf.entries = buf.entries.slice(-max);
       }
 
-      // Only build incremental HTML if this is the currently displayed mode
-      if (targetMode === modeRef.current) {
+      // Only build incremental HTML if this is the currently displayed device+mode
+      if (serial === selectedDeviceRef.current && targetMode === modeRef.current) {
         let newHtml = "";
         for (const entry of batch) {
           if (passesFilter(entry)) {
@@ -288,18 +309,23 @@ export function LogcatPanel() {
     [passesFilter, scheduleFlush, trimHtml]
   );
 
-  // When filter changes, rebuild display HTML from current mode's entries
+  // When filter/mode/device changes, rebuild display HTML from current device+mode entries
   useEffect(() => {
-    const buf = buffers.current[mode];
-    rebuildHtml(buf);
+    if (!selectedDevice) return;
+    const key = `${selectedDevice}:${mode}`;
+    const buf = buffers.current[key];
+    if (buf) {
+      rebuildHtml(buf);
+    }
     flushToDOM();
-  }, [level, filterText, useRegex, caseSensitive, exactMatch, mode, rebuildHtml, flushToDOM]);
+  }, [level, filterText, useRegex, caseSensitive, exactMatch, mode, selectedDevice, rebuildHtml, flushToDOM]);
 
-  // Event subscriptions — each mode checks its own running flag independently
+  // Event subscriptions — each device+mode checks its own running flag
   useLogcatEvents(
     useCallback(
-      (batch: LogEntry[]) => {
-        if (runningMapRef.current["logcat"]) addEntries("logcat", batch);
+      (batch: LogcatBatch) => {
+        const key = `${batch.serial}:logcat`;
+        if (runningMapRef.current[key]) addEntries(batch.serial, "logcat", batch.entries);
       },
       [addEntries]
     )
@@ -307,8 +333,9 @@ export function LogcatPanel() {
 
   useTlogcatEvents(
     useCallback(
-      (batch: LogEntry[]) => {
-        if (runningMapRef.current["tlogcat"]) addEntries("tlogcat", batch);
+      (batch: LogcatBatch) => {
+        const key = `${batch.serial}:tlogcat`;
+        if (runningMapRef.current[key]) addEntries(batch.serial, "tlogcat", batch.entries);
       },
       [addEntries]
     )
@@ -319,7 +346,7 @@ export function LogcatPanel() {
       message.warning("Select a device first");
       return;
     }
-    setModeRunning(mode, true);
+    setModeRunning(mode, true, selectedDevice);
     try {
       if (mode === "logcat") {
         const filter: LogcatFilter = {
@@ -332,14 +359,14 @@ export function LogcatPanel() {
         await startTlogcat(selectedDevice);
       }
     } catch (e) {
-      setModeRunning(mode, false);
+      setModeRunning(mode, false, selectedDevice);
       message.error(String(e));
     }
   };
 
   const handleStop = async () => {
     if (!selectedDevice) return;
-    setModeRunning(mode, false);
+    setModeRunning(mode, false, selectedDevice);
     try {
       if (mode === "logcat") {
         await stopLogcat(selectedDevice);
@@ -446,7 +473,7 @@ export function LogcatPanel() {
             {
               label: (
                 <span>
-                  Logcat{runningMap["logcat"] && <span style={{ marginLeft: 4, width: 6, height: 6, borderRadius: "50%", background: "#52c41a", display: "inline-block", verticalAlign: "middle" }} />}
+                  Logcat{selectedDevice && runningMap[`${selectedDevice}:logcat`] && <span style={{ marginLeft: 4, width: 6, height: 6, borderRadius: "50%", background: "#52c41a", display: "inline-block", verticalAlign: "middle" }} />}
                 </span>
               ),
               value: "logcat",
@@ -454,7 +481,7 @@ export function LogcatPanel() {
             {
               label: (
                 <span>
-                  tlogcat{runningMap["tlogcat"] && <span style={{ marginLeft: 4, width: 6, height: 6, borderRadius: "50%", background: "#52c41a", display: "inline-block", verticalAlign: "middle" }} />}
+                  tlogcat{selectedDevice && runningMap[`${selectedDevice}:tlogcat`] && <span style={{ marginLeft: 4, width: 6, height: 6, borderRadius: "50%", background: "#52c41a", display: "inline-block", verticalAlign: "middle" }} />}
                 </span>
               ),
               value: "tlogcat",

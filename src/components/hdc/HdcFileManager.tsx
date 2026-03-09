@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import {
   App,
   Table,
@@ -49,12 +49,38 @@ export function HdcFileManager() {
   const isRemounted = deviceObj?.isRemounted ?? false;
   const remountInfo = deviceObj?.remountInfo ?? "";
 
-  const [currentPath, setCurrentPath] = useState("/data");
+  // Per-device path map to preserve each device's browsing position
+  const pathMap = useRef<Record<string, string>>({});
+  const prevDeviceRef = useRef<string | null>(null);
+
+  const [currentPath, setCurrentPathState] = useState("/data");
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedFile, setSelectedFile] = useState<FileEntry | null>(null);
   const [catOpen, setCatOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+
+  const setCurrentPath = useCallback((path: string) => {
+    if (connectKey) {
+      pathMap.current[connectKey] = path;
+    }
+    setCurrentPathState(path);
+  }, [connectKey]);
+
+  // On device switch, save old device path and restore new device path
+  useEffect(() => {
+    const prev = prevDeviceRef.current;
+    if (prev && prev !== connectKey) {
+      pathMap.current[prev] = currentPath;
+    }
+    if (connectKey && connectKey !== prev) {
+      const restored = pathMap.current[connectKey] ?? "/data";
+      setCurrentPathState(restored);
+      setSelectedFile(null);
+      setSearchQuery("");
+    }
+    prevDeviceRef.current = connectKey;
+  }, [connectKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadFiles = useCallback(async () => {
     if (!connectKey) return;

@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { App, Table, Button, Space, Popconfirm, Typography, Tag, Tooltip, Input } from "antd";
 import {
   FolderOutlined,
@@ -34,12 +34,39 @@ export function FileManager() {
   const isRemounted = deviceObj?.isRemounted ?? false;
   const remountInfo = deviceObj?.remountInfo ?? "";
 
-  const [currentPath, setCurrentPath] = useState("/sdcard");
+  // Per-device path map to preserve each device's browsing position
+  const pathMap = useRef<Record<string, string>>({});
+  const prevDeviceRef = useRef<string | null>(null);
+
+  const [currentPath, setCurrentPathState] = useState("/sdcard");
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedFile, setSelectedFile] = useState<FileEntry | null>(null);
   const [catOpen, setCatOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+
+  // Save path when navigating, wrapped setter
+  const setCurrentPath = useCallback((path: string) => {
+    if (selectedDevice) {
+      pathMap.current[selectedDevice] = path;
+    }
+    setCurrentPathState(path);
+  }, [selectedDevice]);
+
+  // On device switch, save old device path and restore new device path
+  useEffect(() => {
+    const prev = prevDeviceRef.current;
+    if (prev && prev !== selectedDevice) {
+      pathMap.current[prev] = currentPath;
+    }
+    if (selectedDevice && selectedDevice !== prev) {
+      const restored = pathMap.current[selectedDevice] ?? "/sdcard";
+      setCurrentPathState(restored);
+      setSelectedFile(null);
+      setSearchQuery("");
+    }
+    prevDeviceRef.current = selectedDevice;
+  }, [selectedDevice]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadFiles = useCallback(async () => {
     if (!selectedDevice) return;
