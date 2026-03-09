@@ -46,21 +46,30 @@ export function UploadModal({
     if (!isOpen) return;
 
     const unlisteners: Array<() => void> = [];
+    let active = true;
+
+    const cleanup = (fn: () => void) => {
+      if (active) unlisteners.push(fn);
+      else fn();
+    };
 
     listen("tauri://drag-enter", () => {
+      if (!active) return;
       dragCountRef.current++;
       setDragOver(true);
-    }).then((fn) => unlisteners.push(fn));
+    }).then(cleanup);
 
     listen("tauri://drag-leave", () => {
+      if (!active) return;
       dragCountRef.current--;
       if (dragCountRef.current <= 0) {
         dragCountRef.current = 0;
         setDragOver(false);
       }
-    }).then((fn) => unlisteners.push(fn));
+    }).then(cleanup);
 
     listen<{ paths: string[] }>("tauri://drag-drop", (event) => {
+      if (!active) return;
       dragCountRef.current = 0;
       setDragOver(false);
       if (event.payload.paths?.length) {
@@ -70,9 +79,10 @@ export function UploadModal({
           return [...prev, ...newPaths];
         });
       }
-    }).then((fn) => unlisteners.push(fn));
+    }).then(cleanup);
 
     return () => {
+      active = false;
       unlisteners.forEach((fn) => fn());
     };
   }, [isOpen]);

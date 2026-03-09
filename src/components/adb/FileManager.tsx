@@ -57,6 +57,14 @@ export function FileManager() {
   const [dragOver, setDragOver] = useState(false);
   const dragCountRef = useRef(0);
 
+  // Refs for stable access inside drag-drop listeners (avoids re-registering on every change)
+  const currentPathRef = useRef(currentPath);
+  currentPathRef.current = currentPath;
+  const uploadModalOpenRef = useRef(uploadModalOpen);
+  uploadModalOpenRef.current = uploadModalOpen;
+  const selectedDeviceRef = useRef(selectedDevice);
+  selectedDeviceRef.current = selectedDevice;
+
   const setCurrentPath = useCallback((path: string) => {
     if (selectedDevice) {
       pathMap.current[selectedDevice] = path;
@@ -148,55 +156,77 @@ export function FileManager() {
     };
   }, []);
 
+  // Ref to latest loadFiles so drag-drop handler always calls the current one
+  const loadFilesRef = useRef(loadFiles);
+  loadFilesRef.current = loadFiles;
+
   // --- Drag-drop for direct upload to current directory ---
   useEffect(() => {
     if (!selectedDevice) return;
 
     const unlisteners: Array<() => void> = [];
+    let active = true;
+
+    const cleanup = (fn: () => void) => {
+      if (active) unlisteners.push(fn);
+      else fn(); // Effect already cleaned up; unsubscribe immediately
+    };
 
     listen("tauri://drag-enter", () => {
-      // Don't show drag overlay if upload modal is open (modal handles its own drag)
-      if (uploadModalOpen) return;
+      if (!active || uploadModalOpenRef.current) return;
       dragCountRef.current++;
       setDragOver(true);
-    }).then((fn) => unlisteners.push(fn));
+    }).then(cleanup);
 
     listen("tauri://drag-leave", () => {
+      if (!active) return;
       dragCountRef.current--;
       if (dragCountRef.current <= 0) {
         dragCountRef.current = 0;
         setDragOver(false);
       }
-    }).then((fn) => unlisteners.push(fn));
+    }).then(cleanup);
 
     listen<{ paths: string[] }>("tauri://drag-drop", (event) => {
+      if (!active) return;
       dragCountRef.current = 0;
       setDragOver(false);
-      if (uploadModalOpen) return;
-      if (event.payload.paths?.length && selectedDevice) {
-        pushFiles(selectedDevice, event.payload.paths, currentPath)
+      if (uploadModalOpenRef.current) return;
+      const device = selectedDeviceRef.current;
+      if (event.payload.paths?.length && device) {
+        const paths = event.payload.paths;
+        pushFiles(device, paths, currentPathRef.current)
           .then(() => {
-            message.success(`Uploading ${event.payload.paths.length} file(s)`);
-            loadFiles();
+            if (!active) return;
+            message.success(`Uploaded ${paths.length} file(s)`);
+            // Only refresh if still on the same device
+            if (selectedDeviceRef.current === device) {
+              loadFilesRef.current();
+            }
           })
-          .catch((e) => message.error(String(e)));
+          .catch((e) => { if (active) message.error(String(e)); });
       }
-    }).then((fn) => unlisteners.push(fn));
+    }).then(cleanup);
 
     return () => {
+      active = false;
       unlisteners.forEach((fn) => fn());
       dragCountRef.current = 0;
       setDragOver(false);
     };
-  }, [selectedDevice, currentPath, loadFiles, uploadModalOpen]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedDevice]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // --- Upload via modal ---
   const handleUpload = async (localPaths: string[], remotePath: string) => {
     if (!selectedDevice) return;
+    const device = selectedDevice;
     try {
-      await pushFiles(selectedDevice, localPaths, remotePath);
-      message.success(`Uploading ${localPaths.length} file(s)`);
-      loadFiles();
+      await pushFiles(device, localPaths, remotePath);
+      message.success(`Uploaded ${localPaths.length} file(s)`);
+      // Only refresh if still on the same device
+      if (selectedDeviceRef.current === device) {
+        loadFiles();
+      }
     } catch (e) {
       message.error(String(e));
       throw e;

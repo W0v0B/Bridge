@@ -72,6 +72,14 @@ export function HdcFileManager() {
   const [dragOver, setDragOver] = useState(false);
   const dragCountRef = useRef(0);
 
+  // Refs for stable access inside drag-drop listeners
+  const currentPathRef = useRef(currentPath);
+  currentPathRef.current = currentPath;
+  const uploadModalOpenRef = useRef(uploadModalOpen);
+  uploadModalOpenRef.current = uploadModalOpen;
+  const connectKeyRef = useRef(connectKey);
+  connectKeyRef.current = connectKey;
+
   const setCurrentPath = useCallback((path: string) => {
     if (connectKey) {
       pathMap.current[connectKey] = path;
@@ -158,54 +166,75 @@ export function HdcFileManager() {
     };
   }, []);
 
+  // Ref to latest loadFiles so drag-drop handler always calls the current one
+  const loadFilesRef = useRef(loadFiles);
+  loadFilesRef.current = loadFiles;
+
   // --- Drag-drop ---
   useEffect(() => {
     if (!connectKey) return;
 
     const unlisteners: Array<() => void> = [];
+    let active = true;
+
+    const cleanup = (fn: () => void) => {
+      if (active) unlisteners.push(fn);
+      else fn();
+    };
 
     listen("tauri://drag-enter", () => {
-      if (uploadModalOpen) return;
+      if (!active || uploadModalOpenRef.current) return;
       dragCountRef.current++;
       setDragOver(true);
-    }).then((fn) => unlisteners.push(fn));
+    }).then(cleanup);
 
     listen("tauri://drag-leave", () => {
+      if (!active) return;
       dragCountRef.current--;
       if (dragCountRef.current <= 0) {
         dragCountRef.current = 0;
         setDragOver(false);
       }
-    }).then((fn) => unlisteners.push(fn));
+    }).then(cleanup);
 
     listen<{ paths: string[] }>("tauri://drag-drop", (event) => {
+      if (!active) return;
       dragCountRef.current = 0;
       setDragOver(false);
-      if (uploadModalOpen) return;
-      if (event.payload.paths?.length && connectKey) {
-        sendHdcFiles(connectKey, event.payload.paths, currentPath)
+      if (uploadModalOpenRef.current) return;
+      const device = connectKeyRef.current;
+      if (event.payload.paths?.length && device) {
+        const paths = event.payload.paths;
+        sendHdcFiles(device, paths, currentPathRef.current)
           .then(() => {
-            message.success(`Uploading ${event.payload.paths.length} file(s)`);
-            loadFiles();
+            if (!active) return;
+            message.success(`Uploaded ${paths.length} file(s)`);
+            if (connectKeyRef.current === device) {
+              loadFilesRef.current();
+            }
           })
-          .catch((e) => message.error(String(e)));
+          .catch((e) => { if (active) message.error(String(e)); });
       }
-    }).then((fn) => unlisteners.push(fn));
+    }).then(cleanup);
 
     return () => {
+      active = false;
       unlisteners.forEach((fn) => fn());
       dragCountRef.current = 0;
       setDragOver(false);
     };
-  }, [connectKey, currentPath, loadFiles, uploadModalOpen]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [connectKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // --- Upload via modal ---
   const handleUpload = async (localPaths: string[], remotePath: string) => {
     if (!connectKey) return;
+    const device = connectKey;
     try {
-      await sendHdcFiles(connectKey, localPaths, remotePath);
-      message.success(`Uploading ${localPaths.length} file(s)`);
-      loadFiles();
+      await sendHdcFiles(device, localPaths, remotePath);
+      message.success(`Uploaded ${localPaths.length} file(s)`);
+      if (connectKeyRef.current === device) {
+        loadFiles();
+      }
     } catch (e) {
       message.error(String(e));
       throw e;
