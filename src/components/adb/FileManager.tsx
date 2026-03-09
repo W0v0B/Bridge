@@ -7,13 +7,14 @@ import {
   DownloadOutlined,
   DeleteOutlined,
   ReloadOutlined,
-  EyeOutlined,
   SearchOutlined,
 } from "@ant-design/icons";
 import { CatModal } from "./CatModal";
-import { open, save } from "@tauri-apps/plugin-dialog";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { listen } from "@tauri-apps/api/event";
 import { useDeviceStore } from "../../store/deviceStore";
 import { listFiles, pushFiles, pullFile, deleteFile } from "../../utils/adb";
+import { UploadModal } from "../shared/UploadModal";
 import type { FileEntry } from "../../types/adb";
 
 function humanSize(bytes: number): string {
@@ -34,18 +35,28 @@ export function FileManager() {
   const isRemounted = deviceObj?.isRemounted ?? false;
   const remountInfo = deviceObj?.remountInfo ?? "";
 
-  // Per-device path map to preserve each device's browsing position
+  // Per-device path map
   const pathMap = useRef<Record<string, string>>({});
   const prevDeviceRef = useRef<string | null>(null);
 
   const [currentPath, setCurrentPathState] = useState("/sdcard");
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState(false);
-  const [selectedFile, setSelectedFile] = useState<FileEntry | null>(null);
-  const [catOpen, setCatOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [uploadModalOpen, setUploadModalOpen] = useState(false);
 
-  // Save path when navigating, wrapped setter
+  // Multi-selection state
+  const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
+  const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Cat modal for viewing files
+  const [catOpen, setCatOpen] = useState(false);
+  const [catPath, setCatPath] = useState("");
+
+  // Drag-drop overlay
+  const [dragOver, setDragOver] = useState(false);
+  const dragCountRef = useRef(0);
+
   const setCurrentPath = useCallback((path: string) => {
     if (selectedDevice) {
       pathMap.current[selectedDevice] = path;
@@ -53,7 +64,6 @@ export function FileManager() {
     setCurrentPathState(path);
   }, [selectedDevice]);
 
-  // On device switch, save old device path and restore new device path
   useEffect(() => {
     const prev = prevDeviceRef.current;
     if (prev && prev !== selectedDevice) {
@@ -62,7 +72,7 @@ export function FileManager() {
     if (selectedDevice && selectedDevice !== prev) {
       const restored = pathMap.current[selectedDevice] ?? "/sdcard";
       setCurrentPathState(restored);
-      setSelectedFile(null);
+      setSelectedPaths(new Set());
       setSearchQuery("");
     }
     prevDeviceRef.current = selectedDevice;
@@ -74,7 +84,7 @@ export function FileManager() {
     try {
       const entries = await listFiles(selectedDevice, currentPath);
       setFiles(entries);
-      setSelectedFile(null);
+      setSelectedPaths(new Set());
     } catch (e) {
       message.error(String(e));
     } finally {
@@ -91,47 +101,151 @@ export function FileManager() {
     setSearchQuery("");
   };
 
-  const handleRowClick = (record: FileEntry) => {
+  // --- Multi-selection click handlers ---
+  const toggleSelection = useCallback((record: FileEntry) => {
+    setSelectedPaths((prev) => {
+      const next = new Set(prev);
+      if (next.has(record.path)) {
+        next.delete(record.path);
+      } else {
+        next.add(record.path);
+      }
+      return next;
+    });
+  }, []);
+
+  const handleDoubleClick = useCallback((record: FileEntry) => {
+    // Clear all selections before opening
+    setSelectedPaths(new Set());
     if (record.is_dir) {
       navigateTo(record.path);
     } else {
-      setSelectedFile(record);
+      // Open file viewer
+      setCatPath(record.path);
+      setCatOpen(true);
     }
-  };
+  }, [navigateTo]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleUpload = async () => {
+  const handleRowClick = useCallback((record: FileEntry) => {
+    // Debounce: wait to see if this becomes a double-click
+    if (clickTimerRef.current) {
+      // Second click within timer = double-click
+      clearTimeout(clickTimerRef.current);
+      clickTimerRef.current = null;
+      handleDoubleClick(record);
+    } else {
+      clickTimerRef.current = setTimeout(() => {
+        clickTimerRef.current = null;
+        toggleSelection(record);
+      }, 250);
+    }
+  }, [handleDoubleClick, toggleSelection]);
+
+  // Cleanup click timer on unmount
+  useEffect(() => {
+    return () => {
+      if (clickTimerRef.current) clearTimeout(clickTimerRef.current);
+    };
+  }, []);
+
+  // --- Drag-drop for direct upload to current directory ---
+  useEffect(() => {
     if (!selectedDevice) return;
-    const selected = await open({ multiple: true });
-    if (!selected) return;
-    const paths = Array.isArray(selected) ? selected : [selected];
+
+    const unlisteners: Array<() => void> = [];
+
+    listen("tauri://drag-enter", () => {
+      // Don't show drag overlay if upload modal is open (modal handles its own drag)
+      if (uploadModalOpen) return;
+      dragCountRef.current++;
+      setDragOver(true);
+    }).then((fn) => unlisteners.push(fn));
+
+    listen("tauri://drag-leave", () => {
+      dragCountRef.current--;
+      if (dragCountRef.current <= 0) {
+        dragCountRef.current = 0;
+        setDragOver(false);
+      }
+    }).then((fn) => unlisteners.push(fn));
+
+    listen<{ paths: string[] }>("tauri://drag-drop", (event) => {
+      dragCountRef.current = 0;
+      setDragOver(false);
+      if (uploadModalOpen) return;
+      if (event.payload.paths?.length && selectedDevice) {
+        pushFiles(selectedDevice, event.payload.paths, currentPath)
+          .then(() => {
+            message.success(`Uploading ${event.payload.paths.length} file(s)`);
+            loadFiles();
+          })
+          .catch((e) => message.error(String(e)));
+      }
+    }).then((fn) => unlisteners.push(fn));
+
+    return () => {
+      unlisteners.forEach((fn) => fn());
+      dragCountRef.current = 0;
+      setDragOver(false);
+    };
+  }, [selectedDevice, currentPath, loadFiles, uploadModalOpen]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // --- Upload via modal ---
+  const handleUpload = async (localPaths: string[], remotePath: string) => {
+    if (!selectedDevice) return;
     try {
-      await pushFiles(selectedDevice, paths, currentPath);
-      message.success("Upload started");
+      await pushFiles(selectedDevice, localPaths, remotePath);
+      message.success(`Uploading ${localPaths.length} file(s)`);
       loadFiles();
     } catch (e) {
       message.error(String(e));
+      throw e;
     }
   };
+
+  // --- Batch download ---
+  const selectedFiles = files.filter((f) => selectedPaths.has(f.path));
 
   const handleDownload = async () => {
-    if (!selectedDevice || !selectedFile) return;
-    const savePath = await save({
-      defaultPath: selectedFile.name,
-    });
-    if (!savePath) return;
-    try {
-      await pullFile(selectedDevice, selectedFile.path, savePath);
-      message.success("Download started");
-    } catch (e) {
-      message.error(String(e));
+    if (!selectedDevice || selectedFiles.length === 0) return;
+
+    if (selectedFiles.length === 1 && !selectedFiles[0].is_dir) {
+      // Single file: save dialog
+      const { save } = await import("@tauri-apps/plugin-dialog");
+      const savePath = await save({ defaultPath: selectedFiles[0].name });
+      if (!savePath) return;
+      try {
+        await pullFile(selectedDevice, selectedFiles[0].path, savePath);
+        message.success("Download started");
+      } catch (e) {
+        message.error(String(e));
+      }
+    } else {
+      // Multiple files or folders: pick directory
+      const dir = await openDialog({ directory: true });
+      if (!dir) return;
+      const dirPath = typeof dir === "string" ? dir : Array.isArray(dir) ? dir[0] : null;
+      if (!dirPath) return;
+      try {
+        for (const file of selectedFiles) {
+          const localPath = `${dirPath}/${file.name}`;
+          await pullFile(selectedDevice, file.path, localPath);
+        }
+        message.success(`Downloaded ${selectedFiles.length} item(s)`);
+      } catch (e) {
+        message.error(String(e));
+      }
     }
   };
 
+  // --- Batch delete ---
   const handleDelete = async () => {
-    if (!selectedDevice || !selectedFile) return;
+    if (!selectedDevice || selectedFiles.length === 0) return;
     try {
-      await deleteFile(selectedDevice, selectedFile.path);
-      message.success("Deleted " + selectedFile.name);
+      for (const file of selectedFiles) {
+        await deleteFile(selectedDevice, file.path);
+      }
+      message.success(`Deleted ${selectedFiles.length} item(s)`);
       loadFiles();
     } catch (e) {
       message.error(String(e));
@@ -142,7 +256,7 @@ export function FileManager() {
     ? files.filter((f) => f.name.toLowerCase().includes(searchQuery.toLowerCase()))
     : files;
 
-  // Build breadcrumb items from path segments
+  // Breadcrumb
   const pathSegments = currentPath.split("/").filter(Boolean);
   const pathLinks = [
     <Typography.Link key="/" onClick={() => navigateTo("/")}>/</Typography.Link>,
@@ -200,6 +314,8 @@ export function FileManager() {
     );
   }
 
+  const hasSelection = selectedPaths.size > 0;
+
   return (
     <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", padding: "0 12px 12px" }}>
       {/* Fixed header: path + toolbar */}
@@ -209,34 +325,27 @@ export function FileManager() {
         </div>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
           <Space>
-            <Button icon={<UploadOutlined />} onClick={handleUpload}>
+            <Button icon={<UploadOutlined />} onClick={() => setUploadModalOpen(true)}>
               Upload
             </Button>
             <Button
               icon={<DownloadOutlined />}
-              disabled={!selectedFile || selectedFile.is_dir}
+              disabled={!hasSelection}
               onClick={handleDownload}
             >
-              Download
-            </Button>
-            <Button
-              icon={<EyeOutlined />}
-              disabled={!selectedFile}
-              onClick={() => setCatOpen(true)}
-            >
-              View
+              Download{hasSelection ? ` (${selectedPaths.size})` : ""}
             </Button>
             <Popconfirm
-              title={`Delete ${selectedFile?.name}?`}
+              title={`Delete ${selectedPaths.size} item(s)?`}
               onConfirm={handleDelete}
-              disabled={!selectedFile}
+              disabled={!hasSelection}
             >
               <Button
                 icon={<DeleteOutlined />}
                 danger
-                disabled={!selectedFile}
+                disabled={!hasSelection}
               >
-                Delete
+                Delete{hasSelection ? ` (${selectedPaths.size})` : ""}
               </Button>
             </Popconfirm>
             <Input
@@ -306,8 +415,33 @@ export function FileManager() {
         </div>
       </div>
 
-      {/* Scrollable file list */}
-      <div style={{ flex: 1, overflow: "auto" }}>
+      {/* Scrollable file list with drag-drop overlay */}
+      <div style={{ flex: 1, overflow: "auto", position: "relative" }}>
+        {/* Drag-drop overlay */}
+        {dragOver && (
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              zIndex: 10,
+              background: "rgba(22, 119, 255, 0.08)",
+              border: "2px dashed var(--accent, #1677ff)",
+              borderRadius: 8,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              pointerEvents: "none",
+            }}
+          >
+            <div style={{ textAlign: "center", color: "var(--accent, #1677ff)" }}>
+              <UploadOutlined style={{ fontSize: 36 }} />
+              <div style={{ marginTop: 8, fontSize: 14 }}>
+                Drop files to upload to {currentPath}
+              </div>
+            </div>
+          </div>
+        )}
+
         <Table
           dataSource={filteredFiles}
           columns={columns}
@@ -318,22 +452,31 @@ export function FileManager() {
           onRow={(record) => ({
             onClick: () => handleRowClick(record),
             style: {
-              cursor: record.is_dir ? "pointer" : "default",
-              background:
-                selectedFile?.path === record.path
-                  ? "var(--selected-bg)"
-                  : undefined,
+              cursor: "pointer",
+              background: selectedPaths.has(record.path)
+                ? "var(--selected-bg)"
+                : undefined,
+              userSelect: "none",
             },
           })}
         />
       </div>
 
-      {selectedDevice && selectedFile && (
+      {/* Upload modal */}
+      <UploadModal
+        open={uploadModalOpen}
+        onClose={() => setUploadModalOpen(false)}
+        defaultPath={currentPath}
+        onUpload={handleUpload}
+      />
+
+      {/* File viewer */}
+      {selectedDevice && catPath && (
         <CatModal
           open={catOpen}
           onClose={() => setCatOpen(false)}
           serial={selectedDevice}
-          path={selectedFile.path}
+          path={catPath}
         />
       )}
     </div>

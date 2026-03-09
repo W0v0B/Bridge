@@ -219,6 +219,12 @@ Root/remount status is cached for the session (the same serial is not retried if
 
 File system browsing is implemented by parsing the output of `adb shell ls -la <path>`. Upload and download use `adb push` / `adb pull`.
 
+**Multi-selection** — Users can single-click to toggle file/folder selection (adding/removing from selection set). Double-click clears all selections and opens the item (navigates into folders, opens the View modal for files). Batch download and delete operate on all selected items.
+
+**Drag-and-drop upload** — Files dragged from the OS file explorer into the file table area are uploaded to the current remote directory. A visual overlay appears during drag-over. Tauri's `tauri://drag-drop` window-level events provide native file paths.
+
+**Upload modal** — The Upload button opens a modal with a drag-drop zone, file browser button, editable destination path, and a file list with remove buttons. The shared `UploadModal` component is used by both ADB and OHOS file managers.
+
 ```rust
 #[tauri::command]
 async fn list_files(serial: String, path: String) -> Result<Vec<FileEntry>, String>
@@ -235,7 +241,7 @@ async fn delete_file(serial: String, path: String) -> Result<(), String>
 ```
 
 **View (Cat) feature** — `CatModal` component (`src/components/adb/CatModal.tsx`):
-- Triggered by the **View** button (enabled when a file or node is selected)
+- Triggered by **double-clicking** a file in the file table
 - Reads file content via `runShellCommand` (no new backend command):
   - Text mode: `head -c {N} "{path}" 2>&1`
   - Hex mode: `xxd -l {N} "{path}" 2>&1` (requires `xxd` on device; error is shown inline if unavailable)
@@ -702,7 +708,7 @@ Shown when no device is selected. Vertically and horizontally centred within the
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │  / sdcard/ DCIM/                    ← clickable path segments        │
-│  [Upload] [Download] [View] [Delete] [Refresh] [🔍 Filter by name…]  │
+│  [Upload] [Download (N)] [Delete (N)] [Refresh] [🔍 Filter by name…] │
 │                                              [no root] [not remounted]│
 ├──────────────────────────────────────────────────────────────────────┤
 │  Name            Size      Modified           Permissions      ▲     │

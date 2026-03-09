@@ -41,6 +41,8 @@ All Tauri commands are registered in `src-tauri/src/lib.rs` via `tauri::generate
 - **`App.tsx`** — top-level layout: Ant Design `Layout` with `Sider` (Sidebar) + `Content` (Tabs) + `StatusBar`. Dark theme via `ConfigProvider`.
 - **`components/layout/`** — `Sidebar`, `Toolbar`, `StatusBar`
 - **`components/adb/`** — `DeviceList`, `FileManager`, `LogcatPanel`, `TransferQueue`
+- **`components/hdc/`** — `HdcFileManager`, `HilogPanel`, `HdcCatModal`
+- **`components/shared/`** — `UploadModal` (reusable upload dialog with drag-drop)
 - **`components/serial/`** — `SerialTerminal` (xterm.js), `QuickCommandPanel`, `SerialConfig`, `CommandEditor`
 - **`store/`** — Zustand stores: `deviceStore.ts` (selected ADB device), `serialStore.ts` (active port + baud rate), `configStore.ts`
 - **`hooks/`** — `useAdbEvents.ts`, `useSerialEvents.ts` — subscribe to Tauri events and sync into stores
