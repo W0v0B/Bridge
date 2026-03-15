@@ -137,6 +137,20 @@ interface HilogFilter {
 
 ---
 
+### `HilogExit`
+
+Payload of the `hilog_exit` event. Emitted when a HiLog or tlogcat process exits.
+
+```typescript
+interface HilogExit {
+  connect_key: string; // Device connect_key
+  mode: string;        // "hilog" or "tlogcat"
+  code: number | null; // Process exit code; null if undetermined
+}
+```
+
+---
+
 ### `BundleInfo`
 
 Returned by `list_bundles`. Represents one installed HAP bundle.
@@ -465,9 +479,11 @@ invoke("start_hilog", { connectKey: string, filter: HilogFilter }): Promise<void
   ^(\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+)\s+(\d+)\s+(\d+)\s+([DIWEF])\s+([^\s:][^:]*?):\s*(.*)
   ```
 - Lines that do not match the regex are silently dropped.
+- Stderr is piped and emitted as error-level entries with tag `hilog-stderr`.
 - Filtering is applied in Rust before entries are added to the batch.
 - Entries are batched and emitted when either: batch reaches **64 entries** or **50 ms** have elapsed since the last flush.
 - PID stored in `HILOG_PROCESSES` keyed by `"hilog:{connectKey}"`.
+- When the process exits, emits [`hilog_exit`](#hilog_exit) with `mode: "hilog"` and the exit code.
 
 **Errors**: Rejects with `"HiLog already running for {connectKey}"` if a stream is already active. Call `stop_hilog` first.
 
@@ -516,6 +532,45 @@ invoke("export_hilog", { entries: HilogEntry[], path: string }): Promise<void>
 ```
 
 **Errors**: Rejects if the file cannot be written.
+
+---
+
+### `start_hdc_tlogcat`
+
+Starts streaming tlogcat output for a device.
+
+```typescript
+invoke("start_hdc_tlogcat", { connectKey: string }): Promise<void>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `connectKey` | `string` | Device connect_key |
+
+**Returns**: `void` immediately (streaming runs in background).
+
+**Side effects**: Emits [`hdc_tlogcat_lines`](#hdc_tlogcat_lines) batches.
+
+**Implementation**:
+- Runs `hdc -t {connectKey} shell tlogcat`.
+- Parses lines using `parse_tlogcat_line()`: tries the HiLog regex first, then falls back to treating unparseable non-empty lines as INFO-level entries. This ensures error messages like `/bin/sh: tlogcat: inaccessible or not found` are displayed.
+- Stderr is piped and emitted as error-level entries with tag `tlogcat-stderr`.
+- PID stored in `HILOG_PROCESSES` keyed by `"tlogcat:{connectKey}"`.
+- When the process exits, emits [`hilog_exit`](#hilog_exit) with `mode: "tlogcat"` and the exit code.
+
+**Errors**: Rejects with `"tlogcat already running for this device"` if a stream is already active. Call `stop_hdc_tlogcat` first.
+
+---
+
+### `stop_hdc_tlogcat`
+
+Stops the tlogcat stream for a device.
+
+```typescript
+invoke("stop_hdc_tlogcat", { connectKey: string }): Promise<void>
+```
+
+**Errors**: Rejects with `"No tlogcat running for this device"` if not active.
 
 ---
 
@@ -702,6 +757,34 @@ listen("hilog_lines", (event: { payload: HilogBatch }) => { ... })
 
 ---
 
+### `hdc_tlogcat_lines`
+
+Emitted by `start_hdc_tlogcat` in batches of parsed log entries.
+
+```typescript
+listen("hdc_tlogcat_lines", (event: { payload: HilogBatch }) => { ... })
+```
+
+**Payload**: `HilogBatch { connect_key, entries }` — `entries` contains 1 to 64 entries per batch.
+
+**Notes**: Unlike `hilog_lines`, tlogcat entries are not pre-filtered. Unparseable lines (including error messages) are emitted as INFO-level entries with an empty tag.
+
+---
+
+### `hilog_exit`
+
+Emitted when a HiLog or tlogcat process exits (naturally or after `stop_hilog` / `stop_hdc_tlogcat`).
+
+```typescript
+listen("hilog_exit", (event: { payload: HilogExit }) => { ... })
+```
+
+**Payload**: `HilogExit { connect_key, mode, code }`
+
+**Notes**: `code: null` means the exit code could not be determined. This event signals that the log stream has terminated and no further `hilog_lines` / `hdc_tlogcat_lines` events will be emitted for this device+mode. The frontend uses this to reset the running indicator and show a warning if the process exited with a non-zero code.
+
+---
+
 ### `transfer_progress`
 
 Shared with the ADB module. Emitted during `send_hdc_files` and `recv_hdc_file`.
@@ -757,6 +840,8 @@ import {
 | `stopHilog(connectKey)` | `stop_hilog` |
 | `clearHilog(connectKey)` | `clear_hilog` |
 | `exportHilog(entries, path)` | `export_hilog` |
+| `startHdcTlogcat(connectKey)` | `start_hdc_tlogcat` |
+| `stopHdcTlogcat(connectKey)` | `stop_hdc_tlogcat` |
 | `listBundles(connectKey)` | `list_bundles` |
 | `installHap(connectKey, hapPath)` | `install_hap` |
 | `uninstallBundle(connectKey, bundleName)` | `uninstall_bundle` |
@@ -788,6 +873,8 @@ try {
 | Non-zero exit from shell command | Combined stdout+stderr as error string |
 | HiLog already running | `"HiLog already running for {connectKey}"` |
 | No HiLog stream active | `"No HiLog running for {connectKey}"` |
+| tlogcat already running | `"tlogcat already running for this device"` |
+| No tlogcat stream active | `"No tlogcat running for this device"` |
 | No shell stream active | `"No HDC shell stream running for {connectKey}"` |
 | File send/recv failure | Non-zero exit output from `hdc file send/recv` |
 

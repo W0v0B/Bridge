@@ -156,7 +156,8 @@ tokio Runtime
 │
 ├── Task: hdc_device_watcher     # Polls `hdc list targets` + `-v` every 2s; cross-references to filter phantoms
 ├── Task: hdc_remount            # Runs `hdc target mount` once per device per session
-├── Task: hilog_reader           # Streams HiLog output; emits HilogBatch { connect_key, entries }
+├── Task: hilog_reader           # Streams HiLog output; emits HilogBatch { connect_key, entries } + hilog_exit on termination
+├── Task: tlogcat_reader        # Streams tlogcat output; emits HilogBatch + hilog_exit; fallback parsing for error messages
 ├── Task: hdc_shell_stream       # Streams hdc shell output; emits hdc_shell_output/hdc_shell_exit
 ├── Task: hdc_bundle_resolver    # Parallel bm dump -n calls via JoinSet for App Manager
 
@@ -221,9 +222,9 @@ File system browsing is implemented by parsing the output of `adb shell ls -la <
 
 **Multi-selection** — Users can single-click to toggle file/folder selection (adding/removing from selection set). Double-click clears all selections and opens the item (navigates into folders, opens the View modal for files). Batch download and delete operate on all selected items.
 
-**Drag-and-drop upload** — Files dragged from the OS file explorer into the file table area are uploaded to the current remote directory. A visual overlay appears during drag-over. Tauri's `tauri://drag-drop` window-level events provide native file paths.
+**Drag-and-drop upload** — Files dragged from the OS file explorer into the file table area are uploaded to the current remote directory. A visual overlay appears during drag-over and is positioned on the outermost non-scrollable container to remain visible regardless of scroll position. Tauri's `tauri://drag-drop` window-level events provide native file paths.
 
-**Upload modal** — The Upload button opens a modal with a drag-drop zone, file browser button, editable destination path, and a file list with remove buttons. The shared `UploadModal` component is used by both ADB and OHOS file managers.
+**Upload modal** — The Upload button opens a modal with a drag-drop zone, file browser button, editable destination path, and a file list with remove buttons. The shared `UploadModal` component is used by both ADB and OHOS file managers. It accepts an optional `quickPaths` prop to display clickable quick access tags above the destination path input, matching the quick access paths configured in the File Manager toolbar.
 
 ```rust
 #[tauri::command]
@@ -691,7 +692,7 @@ Shown when no device is selected. Vertically and horizontally centred within the
   - `Aa` — Case-sensitive match
   - `ab` — Whole-word match (`\b` boundaries)
   - Filters match against both tag and message simultaneously.
-- **Start / Stop button**: starts or stops the stream for the **currently displayed** mode only; the other mode is unaffected.
+- **Start / Stop button**: starts or stops the stream for the **currently displayed** mode only; the other mode is unaffected. If the backend process exits unexpectedly (e.g., tlogcat not found on device), the running indicator is automatically reset and a warning notification is shown.
 - **Clear button**: clears the current mode's in-app display buffer. In logcat mode, also runs `adb logcat -c` to flush the on-device ring buffer so the next Start begins from a clean slate. In tlogcat mode, clears display only.
 - **Export button**: exports only the currently filtered and visible entries to a `.txt` file.
 - **Max lines input**: always-visible buffer limit (default 5000, 0 = unlimited). Entry count is shown alongside.
