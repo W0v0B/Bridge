@@ -5,6 +5,7 @@ import {
   DownloadOutlined, FileAddOutlined, BgColorsOutlined,
 } from "@ant-design/icons";
 import { save } from "@tauri-apps/plugin-dialog";
+import { listen } from "@tauri-apps/api/event";
 import { writeTextFileTo, appendTextToFile } from "../../utils/fs";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { useDeviceStore } from "../../store/deviceStore";
@@ -187,6 +188,22 @@ export function ShellPanel() {
       [devices, writeToDeviceBuffer, setDeviceRunning]
     )
   );
+
+  // Script output/exit events — use device ID as correlation key
+  useEffect(() => {
+    const unlistenOutput = listen<{ id: string; data: string }>("script_output", (event) => {
+      writeToDeviceBuffer(event.payload.id, event.payload.data);
+    });
+    const unlistenExit = listen<{ id: string; code: number }>("script_exit", (event) => {
+      const exitLine = `\n[Script exited with code ${event.payload.code}]\n`;
+      writeToDeviceBuffer(event.payload.id, exitLine);
+      setDeviceRunning(event.payload.id, false);
+    });
+    return () => {
+      unlistenOutput.then((f) => f());
+      unlistenExit.then((f) => f());
+    };
+  }, [writeToDeviceBuffer, setDeviceRunning]);
 
   const handleCommand = async () => {
     const cmd = input.trim();

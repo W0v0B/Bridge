@@ -10,6 +10,7 @@ use tauri::Manager as _;
 use adb::{apps, commands, device, file, logcat};
 use hdc::{apps as hdc_apps, commands as hdc_commands, device as hdc_device, file as hdc_file, hilog};
 use serial::manager;
+use util as script_util;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -81,6 +82,9 @@ pub fn run() {
             open_telnet_session,
             close_serial_port,
             write_serial,
+            // Script execution
+            run_local_script,
+            stop_local_script,
             // File utilities
             write_text_file_to_path,
             append_text_to_file,
@@ -360,6 +364,22 @@ async fn force_stop_bundle(connect_key: String, bundle_name: String) -> Result<(
 #[tauri::command]
 async fn clear_bundle_data(connect_key: String, bundle_name: String) -> Result<(), String> {
     hdc_apps::clear_bundle_data(&connect_key, &bundle_name).await
+}
+
+// ── Script Execution ──
+
+#[tauri::command]
+async fn run_local_script(
+    id: String,
+    script_path: String,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    script_util::run_script(&id, &script_path, app).await
+}
+
+#[tauri::command]
+async fn stop_local_script(id: String) -> Result<(), String> {
+    script_util::stop_script(&id).await
 }
 
 // ── File Utilities ──

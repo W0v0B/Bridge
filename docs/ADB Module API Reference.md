@@ -842,7 +842,53 @@ listen("transfer_progress", (event: { payload: TransferProgress }) => { ... })
 
 ---
 
-## 9. Frontend Utility Wrappers
+## 9. Commands — Local Script Execution
+
+These commands are not ADB-specific — they execute scripts on the host machine. Used by the Quick Commands panel when a command has a `scriptPath` set.
+
+### `run_local_script`
+
+Runs a local script (.bat, .cmd, .ps1, .sh) and streams its output via events.
+
+**Rust signature:**
+```rust
+#[tauri::command]
+async fn run_local_script(id: String, script_path: String, app: AppHandle) -> Result<(), String>
+```
+
+**Frontend call:**
+```typescript
+import { runLocalScript } from "../utils/script";
+await runLocalScript(deviceId, "/path/to/script.bat");
+```
+
+**Parameters:** `id` — caller-provided identifier (typically the device ID) for correlating output events. `script_path` — absolute path to the script file.
+
+**Events emitted:**
+- `script_output` — `{ id: string, data: string }` — stdout/stderr chunks
+- `script_exit` — `{ id: string, code: number }` — process exit code
+
+**Notes:** On Windows, scripts are executed via `cmd /C <script_path>`. Only one script per `id` can run at a time — starting a new one kills the previous.
+
+### `stop_local_script`
+
+Stops a running script by its id.
+
+**Rust signature:**
+```rust
+#[tauri::command]
+async fn stop_local_script(id: String) -> Result<(), String>
+```
+
+**Frontend call:**
+```typescript
+import { stopLocalScript } from "../utils/script";
+await stopLocalScript(deviceId);
+```
+
+---
+
+## 10. Frontend Utility Wrappers
 
 All wrappers are in `src/utils/adb.ts` and are thin `invoke()` calls with TypeScript types.
 
@@ -898,9 +944,16 @@ import {
 | `clearPackageData(serial, pkg)` | `clear_package_data` |
 | `reEnablePackage(serial, pkg)` | `re_enable_package` |
 
+**Script wrappers** (in `src/utils/script.ts`):
+
+| Wrapper | Maps to command |
+|---------|-----------------|
+| `runLocalScript(id, scriptPath)` | `run_local_script` |
+| `stopLocalScript(id)` | `stop_local_script` |
+
 ---
 
-## 10. Error Handling
+## 11. Error Handling
 
 All Tauri commands return `Result<T, String>` on the Rust side, which maps to a rejected Promise on the frontend. The rejection value is always a plain string with a human-readable message.
 

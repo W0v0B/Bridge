@@ -79,16 +79,21 @@ interface ConnectedDevice {
 
 ### `QuickCommand`
 
-A saved command in the Quick Commands panel. Managed in the `commandStore` Zustand store.
+A saved command in the Quick Commands panel. Managed in the `commandStore` Zustand store (persisted to `bridge-commands`).
 
 ```typescript
+type DeviceType = "adb" | "ohos" | "serial";
+
 interface QuickCommand {
   id: string;             // Unique ID (Date.now()-based)
   label: string;          // Display label shown on the button
   command: string;        // Raw string to send to the device
   sequenceOrder?: number; // undefined = excluded from Sequence Runner; 1, 2, 3, … = run order
+  scriptPath?: string;    // If set, executes a local script instead of sending a device command
 }
 ```
+
+Commands are stored per device type (`commandsByType: { adb, ohos, serial }`). Each type has its own independent list. Scripts (.bat, .cmd, .ps1, .sh) can be added via file picker and are executed locally on the host machine via `cmd /C <script>`, with output streamed to the Shell panel.
 
 ---
 
@@ -515,15 +520,22 @@ writeToDeviceBuffer(device.id, event.data)
 ### Quick Commands Store (`commandStore.ts`)
 
 ```typescript
+interface CommandsByType {
+  adb: QuickCommand[];
+  ohos: QuickCommand[];
+  serial: QuickCommand[];
+}
+
 interface CommandState {
-  commands: QuickCommand[];
-  addCommand: (label: string, command: string) => void;
-  removeCommand: (id: string) => void;
-  setSequenceOrder: (id: string, order: number | undefined) => void;
+  commandsByType: CommandsByType;
+  addCommand: (deviceType: DeviceType, label: string, command: string) => void;
+  addScript: (deviceType: DeviceType, label: string, scriptPath: string) => void;
+  removeCommand: (deviceType: DeviceType, id: string) => void;
+  setSequenceOrder: (deviceType: DeviceType, id: string, order: number | undefined) => void;
 }
 ```
 
-Commands are shared between ADB and Serial devices. The `sequenceOrder` field is set per-command to include it in the Sequence Runner.
+Commands are stored per device type and persisted via `zustand/middleware` persist to `bridge-commands`. The QuickCommandsPanel automatically selects the correct list based on the selected device's type. The `sequenceOrder` field is set per-command to include it in the Sequence Runner.
 
 ### Sequence Runner State (`QuickCommandsPanel.tsx`)
 

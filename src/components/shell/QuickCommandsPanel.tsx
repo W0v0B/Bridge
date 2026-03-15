@@ -1,15 +1,19 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import {
-  App, Button, Input, InputNumber, Space, Typography, Tooltip, Divider,
+  App, Button, Input, InputNumber, Space, Typography, Tooltip, Divider, Tag,
 } from "antd";
 import {
   DeleteOutlined, SendOutlined, PlusOutlined,
-  PlayCircleOutlined, StopOutlined,
+  PlayCircleOutlined, StopOutlined, FileOutlined,
 } from "@ant-design/icons";
-import { useCommandStore } from "../../store/commandStore";
+import { open } from "@tauri-apps/plugin-dialog";
+import { useCommandStore, type DeviceType } from "../../store/commandStore";
 import { useDeviceStore } from "../../store/deviceStore";
 import { startShellStream } from "../../utils/adb";
+import { startHdcShellStream } from "../../utils/hdc";
 import { writeToPort } from "../../utils/serial";
+import { runLocalScript } from "../../utils/script";
+import { listen } from "@tauri-apps/api/event";
 
 const { Text } = Typography;
 
@@ -29,10 +33,18 @@ interface SeqEntry {
   device: DeviceItem | null;
 }
 
+function getDeviceType(device: DeviceItem | undefined): DeviceType {
+  if (!device) return "adb";
+  if (device.type === "ohos") return "ohos";
+  if (device.type === "serial") return "serial";
+  return "adb";
+}
+
 export function QuickCommandsPanel({ onOutput, onStreamStart }: QuickCommandsPanelProps) {
   const { message } = App.useApp();
-  const commands = useCommandStore((s) => s.commands);
+  const commandsByType = useCommandStore((s) => s.commandsByType);
   const addCommand = useCommandStore((s) => s.addCommand);
+  const addScript = useCommandStore((s) => s.addScript);
   const removeCommand = useCommandStore((s) => s.removeCommand);
   const setSequenceOrder = useCommandStore((s) => s.setSequenceOrder);
   const selectedDeviceId = useDeviceStore((s) => s.selectedDeviceId);
@@ -58,6 +70,23 @@ export function QuickCommandsPanel({ onOutput, onStreamStart }: QuickCommandsPan
   selectedDeviceIdRef.current = selectedDeviceId;
 
   const selectedDevice = devices.find((d) => d.id === selectedDeviceId);
+  const deviceType = getDeviceType(selectedDevice);
+  const commands = commandsByType[deviceType] ?? [];
+
+  // Listen for script_output / script_exit events
+  useEffect(() => {
+    const unlistenOutput = listen<{ id: string; data: string }>("script_output", (event) => {
+      onOutputRef.current?.(event.payload.data, event.payload.id);
+    });
+    const unlistenExit = listen<{ id: string; code: number }>("script_exit", (event) => {
+      const exitLine = `\n[Script exited with code ${event.payload.code}]\n`;
+      onOutputRef.current?.(exitLine, event.payload.id);
+    });
+    return () => {
+      unlistenOutput.then((f) => f());
+      unlistenExit.then((f) => f());
+    };
+  }, []);
 
   const getEntry = (deviceId: string): SeqEntry => {
     if (!seqMap.current.has(deviceId)) {
@@ -91,6 +120,32 @@ export function QuickCommandsPanel({ onOutput, onStreamStart }: QuickCommandsPan
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const sendCommand = useCallback(async (
+    device: DeviceItem,
+    command: string,
+    scriptPath?: string,
+    echoPrefix?: string,
+  ) => {
+    if (scriptPath) {
+      // Local script execution — use device.id as the correlation key
+      onOutputRef.current?.(`${echoPrefix ?? ">"} [script] ${scriptPath}\n`, device.id);
+      onStreamStartRef.current?.(device.id);
+      await runLocalScript(device.id, scriptPath);
+    } else if (device.type === "adb") {
+      onOutputRef.current?.(`${echoPrefix ?? "$"} ${command}\n`, device.id);
+      onStreamStartRef.current?.(device.id);
+      await startShellStream(device.serial, command);
+    } else if (device.type === "ohos") {
+      onOutputRef.current?.(`${echoPrefix ?? "$"} ${command}\n`, device.id);
+      onStreamStartRef.current?.(device.id);
+      await startHdcShellStream(device.serial, command);
+    } else {
+      // serial
+      onOutputRef.current?.(`${echoPrefix ?? ">"} ${command}\n`, device.id);
+      await writeToPort(device.serial, command + "\r\n");
+    }
+  }, []);
+
   // Stable ref to the step function — avoids stale closure inside setTimeout
   const runNextStepRef = useRef<(deviceId: string) => void>(null!);
   runNextStepRef.current = (deviceId: string) => {
@@ -100,7 +155,8 @@ export function QuickCommandsPanel({ onOutput, onStreamStart }: QuickCommandsPan
     const device = entry.device;
     if (!device) { stopSequenceForDevice(deviceId); return; }
 
-    const seqCmds = useCommandStore.getState().commands
+    const dt = getDeviceType(device);
+    const seqCmds = (useCommandStore.getState().commandsByType[dt] ?? [])
       .filter((c) => c.sequenceOrder && c.sequenceOrder > 0)
       .sort((a, b) => (a.sequenceOrder ?? 0) - (b.sequenceOrder ?? 0));
 
@@ -115,19 +171,11 @@ export function QuickCommandsPanel({ onOutput, onStreamStart }: QuickCommandsPan
       setSeqCurrentLabel(cmd.label);
     }
 
-    // Send to the captured device, writing output to that device's buffer (not selected device's)
     (async () => {
       try {
-        if (device.type === "adb") {
-          onOutputRef.current?.(`$ ${cmd.command}\n`, device.id);
-          onStreamStartRef.current?.(device.id);
-          await startShellStream(device.serial, cmd.command);
-        } else {
-          onOutputRef.current?.(`> ${cmd.command}\n`, device.id);
-          await writeToPort(device.serial, cmd.command + "\r\n");
-        }
+        await sendCommand(device, cmd.command, cmd.scriptPath);
       } catch (e) {
-        const prefix = device.type === "adb" ? "$" : ">";
+        const prefix = device.type === "serial" ? ">" : "$";
         onOutputRef.current?.(`${prefix} ${cmd.command}\nError: ${e}\n`, device.id);
       }
     })();
@@ -172,38 +220,51 @@ export function QuickCommandsPanel({ onOutput, onStreamStart }: QuickCommandsPan
     }
   };
 
-  const handleSend = useCallback(async (command: string) => {
+  const handleSend = useCallback(async (command: string, scriptPath?: string) => {
     if (!selectedDevice) {
       message.warning("No device selected");
       return;
     }
     try {
-      if (selectedDevice.type === "adb") {
-        onOutput?.(`$ ${command}\n`);
-        onStreamStart?.();
-        await startShellStream(selectedDevice.serial, command);
-      } else {
-        onOutput?.(`> ${command}\n`);
-        await writeToPort(selectedDevice.serial, command + "\r\n");
-      }
+      await sendCommand(selectedDevice, command, scriptPath);
     } catch (e) {
-      const prefix = selectedDevice.type === "adb" ? "$" : ">";
+      const prefix = selectedDevice.type === "serial" ? ">" : "$";
       onOutput?.(`${prefix} ${command}\nError: ${e}\n`);
     }
-  }, [selectedDevice, onOutput, onStreamStart]);
+  }, [selectedDevice, onOutput, sendCommand, message]);
 
   const handleAdd = () => {
     const label = newLabel.trim();
     const cmd = newCommand.trim();
     if (!label || !cmd) return;
-    addCommand(label, cmd);
+    addCommand(deviceType, label, cmd);
     setNewLabel("");
     setNewCommand("");
   };
 
+  const handleAddScript = async () => {
+    const selected = await open({
+      multiple: false,
+      filters: [{ name: "Scripts", extensions: ["bat", "cmd", "ps1", "sh"] }],
+    });
+    if (!selected) return;
+    const path = typeof selected === "string" ? selected : selected;
+    // Use the filename (without extension) as the default label
+    const filename = path.split(/[\\/]/).pop() ?? path;
+    const label = filename.replace(/\.[^.]+$/, "");
+    addScript(deviceType, label, path);
+  };
+
+  const typeLabel = deviceType === "adb" ? "ADB" : deviceType === "ohos" ? "OHOS" : "Serial";
+
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", padding: 12 }}>
-      <Text strong style={{ marginBottom: 8 }}>Quick Commands</Text>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+        <Text strong>Quick Commands</Text>
+        <Tag color={deviceType === "adb" ? "blue" : deviceType === "ohos" ? "green" : "orange"}>
+          {typeLabel}
+        </Tag>
+      </div>
 
       {/* Command list */}
       <div style={{ flex: 1, overflow: "auto" }}>
@@ -222,9 +283,16 @@ export function QuickCommandsPanel({ onOutput, onStreamStart }: QuickCommandsPan
             }}
           >
             <div style={{ flex: 1, minWidth: 0 }}>
-              <Text strong style={{ fontSize: 13, display: "block" }}>{cmd.label}</Text>
-              <Text type="secondary" style={{ fontSize: 11, fontFamily: "monospace" }} ellipsis>
-                {cmd.command}
+              <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                <Text strong style={{ fontSize: 13 }}>{cmd.label}</Text>
+                {cmd.scriptPath && (
+                  <Tag color="purple" style={{ fontSize: 10, lineHeight: "16px", padding: "0 4px" }}>
+                    script
+                  </Tag>
+                )}
+              </div>
+              <Text type="secondary" style={{ fontSize: 11, fontFamily: "monospace", display: "block" }} ellipsis>
+                {cmd.scriptPath ?? cmd.command}
               </Text>
             </div>
             <Tooltip title="Sequence order (blank = skip)">
@@ -232,15 +300,15 @@ export function QuickCommandsPanel({ onOutput, onStreamStart }: QuickCommandsPan
                 size="small"
                 min={1}
                 value={cmd.sequenceOrder ?? null}
-                onChange={(v) => setSequenceOrder(cmd.id, v ?? undefined)}
+                onChange={(v) => setSequenceOrder(deviceType, cmd.id, v ?? undefined)}
                 placeholder="#"
                 style={{ width: 44 }}
               />
             </Tooltip>
             <Button size="small" type="primary" icon={<SendOutlined />}
-              onClick={() => handleSend(cmd.command)} />
+              onClick={() => handleSend(cmd.command, cmd.scriptPath)} />
             <Button size="small" danger icon={<DeleteOutlined />}
-              onClick={() => removeCommand(cmd.id)} />
+              onClick={() => removeCommand(deviceType, cmd.id)} />
           </div>
         ))}
       </div>
@@ -284,16 +352,23 @@ export function QuickCommandsPanel({ onOutput, onStreamStart }: QuickCommandsPan
         )}
       </div>
 
-      {/* Add command form */}
+      {/* Add command / script form */}
       <div style={{ borderTop: "1px solid var(--border)", paddingTop: 8 }}>
         <Space direction="vertical" style={{ width: "100%" }} size={4}>
           <Input size="small" placeholder="Label" value={newLabel}
             onChange={(e) => setNewLabel(e.target.value)} />
           <Input size="small" placeholder="Command" value={newCommand}
             onChange={(e) => setNewCommand(e.target.value)} onPressEnter={handleAdd} />
-          <Button size="small" icon={<PlusOutlined />} onClick={handleAdd} block>
-            Add Command
-          </Button>
+          <Space style={{ width: "100%" }} size={4}>
+            <Button size="small" icon={<PlusOutlined />} onClick={handleAdd} style={{ flex: 1 }}>
+              Add Command
+            </Button>
+            <Tooltip title="Add a local script (.bat, .cmd, .ps1, .sh)">
+              <Button size="small" icon={<FileOutlined />} onClick={handleAddScript}>
+                Add Script
+              </Button>
+            </Tooltip>
+          </Space>
         </Space>
       </div>
     </div>
