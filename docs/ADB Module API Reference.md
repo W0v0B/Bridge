@@ -341,7 +341,7 @@ invoke("push_files", { serial: string, localPaths: string[], remotePath: string 
 
 **Returns**: `void` on success.
 
-**Side effects**: Emits [`transfer_progress`](#transfer_progress) events during the operation (one per progress line parsed from `adb push` stderr, plus a final `percent: 100` event per file).
+**Side effects**: Emits [`transfer_progress`](#transfer_progress) events during the operation (one per progress line parsed from `adb push` stderr, plus a final `percent: 100` on success or `percent: -1` on failure per file).
 
 **Notes**: Files are uploaded sequentially (one at a time). If any file fails, the command rejects immediately and subsequent files are not processed.
 
@@ -838,7 +838,7 @@ listen("transfer_progress", (event: { payload: TransferProgress }) => { ... })
 
 **Payload**: `TransferProgress`
 
-**Notes**: Progress is parsed from `adb` stderr lines matching `[ 42%]`. A final event with `percent: 100.0` is always emitted on completion. Multiple files in a `push_files` call each get their own UUID `id`.
+**Notes**: Progress is parsed from `adb` stderr lines matching `[ 42%]`. On success, a final event with `percent: 100.0` is emitted. On failure, an event with `percent: -1.0` and `speed: "failed"` is emitted instead. Multiple files in a `push_files` call each get their own UUID `id`.
 
 ---
 

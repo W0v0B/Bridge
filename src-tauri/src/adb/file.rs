@@ -149,11 +149,27 @@ pub async fn push_files(
             .await
             .map_err(|e| format!("adb push failed: {}", e))?;
 
-        // Emit 100% on completion
+        if !status.success() {
+            // Emit error status so the progress bar reflects the failure
+            let _ = app.emit(
+                "transfer_progress",
+                TransferProgress {
+                    id,
+                    file_name: file_name.clone(),
+                    transferred: 0,
+                    total: 0,
+                    percent: -1.0,
+                    speed: "failed".to_string(),
+                },
+            );
+            return Err(format!("adb push failed for {}", file_name));
+        }
+
+        // Emit 100% only on success
         let _ = app.emit(
             "transfer_progress",
             TransferProgress {
-                id: id.clone(),
+                id,
                 file_name: file_name.clone(),
                 transferred: 0,
                 total: 0,
@@ -161,10 +177,6 @@ pub async fn push_files(
                 speed: String::new(),
             },
         );
-
-        if !status.success() {
-            return Err(format!("adb push failed for {}", file_name));
-        }
     }
     Ok(())
 }
@@ -221,6 +233,21 @@ pub async fn pull_file(
         .await
         .map_err(|e| format!("adb pull failed: {}", e))?;
 
+    if !status.success() {
+        let _ = app.emit(
+            "transfer_progress",
+            TransferProgress {
+                id,
+                file_name: file_name.clone(),
+                transferred: 0,
+                total: 0,
+                percent: -1.0,
+                speed: "failed".to_string(),
+            },
+        );
+        return Err(format!("adb pull failed for {}", file_name));
+    }
+
     let _ = app.emit(
         "transfer_progress",
         TransferProgress {
@@ -232,10 +259,6 @@ pub async fn pull_file(
             speed: String::new(),
         },
     );
-
-    if !status.success() {
-        return Err(format!("adb pull failed for {}", file_name));
-    }
 
     Ok(())
 }

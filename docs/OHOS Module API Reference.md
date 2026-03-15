@@ -236,6 +236,24 @@ invoke("connect_ohos_device", { addr: string }): Promise<string>
 
 ---
 
+### `disconnect_ohos_device`
+
+Disconnects an OHOS device over TCP via `hdc tconn <addr> -remove`. Also cleans up cached remount status for the device.
+
+```typescript
+invoke("disconnect_ohos_device", { addr: string }): Promise<string>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `addr` | `string` | `"IP:port"` string of the device to disconnect |
+
+**Returns**: Raw output string from `hdc tconn ... -remove`.
+
+**Errors**: Rejects if the command exits with a non-zero code.
+
+---
+
 #### Device Watcher
 
 `start_device_watcher(app)` is started automatically on app launch (in `lib.rs::setup`). It is not a Tauri command.
@@ -244,9 +262,10 @@ invoke("connect_ohos_device", { addr: string }): Promise<string>
 1. Polls `hdc list targets` + `hdc list targets -v` (in parallel) every **2 seconds**. Only devices present in the non-verbose output are kept; verbose output provides metadata (conn_type, state, name).
 2. When the device list changes, emits [`hdc_devices_changed`](#hdc_devices_changed).
 3. For each newly seen device with `state == "Connected"`, spawns `attempt_remount()` **once per connect_key per session** (tracked in a session-local `HashSet`).
-4. `attempt_remount()`:
-   - Runs `hdc -t {connect_key} target mount`.
-   - Inspects combined stdout+stderr for failure markers: `[Fail]`, `not user mountable`, `Operation not permitted`, `debug mode`.
+4. `attempt_remount()` runs both commands sequentially (both are required):
+   - **Step 1**: `hdc -t {connect_key} shell mount -o rw,remount /`
+   - **Step 2**: `hdc -t {connect_key} target mount`
+   - Both steps inspect combined stdout+stderr for failure markers: `[Fail]`, `not user mountable`, `Operation not permitted`, `debug mode`, `Read-only file system`.
    - `success = exit_status.success() && !has_failure`.
    - Stores `(is_remounted, remount_info)` in `DEVICE_REMOUNT_STATUS: Lazy<Mutex<HashMap<String, (bool, String)>>>`.
    - Re-emits `hdc_devices_changed` with the updated status.
@@ -691,7 +710,7 @@ Shared with the ADB module. Emitted during `send_hdc_files` and `recv_hdc_file`.
 listen("transfer_progress", (event: { payload: TransferProgress }) => { ... })
 ```
 
-**Notes**: HDC does not expose byte-level progress markers, so only `percent: 0` (start) and `percent: 100` (completion) are emitted. See the ADB Module API Reference for the `TransferProgress` type definition.
+**Notes**: HDC does not expose byte-level progress markers, so only `percent: 0` (start) and `percent: 100` (success) are emitted. On failure, `percent: -1` with `speed: "failed"` is emitted instead. See the ADB Module API Reference for the `TransferProgress` type definition.
 
 ---
 
@@ -726,6 +745,7 @@ import {
 |---------|-----------------|
 | `getOhosDevices()` | `get_ohos_devices` |
 | `connectOhosDevice(addr)` | `connect_ohos_device` |
+| `disconnectOhosDevice(addr)` | `disconnect_ohos_device` |
 | `runHdcShellCommand(connectKey, command)` | `run_hdc_shell_command` |
 | `startHdcShellStream(connectKey, command)` | `start_hdc_shell_stream` |
 | `stopHdcShellStream(connectKey)` | `stop_hdc_shell_stream` |

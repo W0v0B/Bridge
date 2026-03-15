@@ -10,6 +10,7 @@ import {
 } from "@ant-design/icons";
 import { useDeviceStore } from "../../store/deviceStore";
 import { disconnectDevice, getDevices } from "../../utils/adb";
+import { disconnectOhosDevice } from "../../utils/hdc";
 import { closePort } from "../../utils/serial";
 import type { ConnectedDevice } from "../../types/device";
 
@@ -49,8 +50,9 @@ export function Sidebar({ onConnect, onRefresh, onSettings }: SidebarProps) {
       } else if (device.type === "serial") {
         await closePort(device.serial);
         removeDevice(device.id);
-      } else {
-        removeDevice(device.id);
+      } else if (device.type === "ohos") {
+        await disconnectOhosDevice(device.serial);
+        // Device watcher will remove it from the list once hdc confirms disconnection
       }
     } catch {
       // ignore

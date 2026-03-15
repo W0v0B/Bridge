@@ -10,6 +10,10 @@ export async function connectOhosDevice(addr: string) {
   return invoke<string>("connect_ohos_device", { addr });
 }
 
+export async function disconnectOhosDevice(addr: string) {
+  return invoke<string>("disconnect_ohos_device", { addr });
+}
+
 export async function runHdcShellCommand(connectKey: string, command: string) {
   return invoke<string>("run_hdc_shell_command", { connectKey, command });
 }

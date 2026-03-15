@@ -121,41 +121,72 @@ pub async fn connect_device(addr: &str) -> Result<String, String> {
     run_hdc(&["tconn", addr]).await
 }
 
-/// Attempt `hdc target mount` for a device.
-/// Updates DEVICE_REMOUNT_STATUS and re-emits hdc_devices_changed.
-async fn attempt_remount(connect_key: String, app: AppHandle) {
-    let output = cmd(hdc_path())
-        .args(["-t", &connect_key, "target", "mount"])
-        .output()
-        .await;
+/// Disconnect an OHOS device: `hdc tconn <addr> -remove`.
+pub async fn disconnect_device(addr: &str) -> Result<String, String> {
+    let result = run_hdc(&["tconn", addr, "-remove"]).await;
 
-    let (is_remounted, info) = match output {
+    // Clean up cached remount status for this device
+    if let Ok(mut map) = DEVICE_REMOUNT_STATUS.lock() {
+        map.remove(addr);
+    }
+
+    result
+}
+
+/// Try a single remount command and return (success, output_message).
+async fn try_remount_cmd(_connect_key: &str, args: &[&str]) -> (bool, String) {
+    match cmd(hdc_path()).args(args).output().await {
         Ok(out) => {
             let stdout = String::from_utf8_lossy(&out.stdout).to_string();
             let stderr = String::from_utf8_lossy(&out.stderr).to_string();
             let combined = format!("{}{}", stdout, stderr);
             let trimmed = combined.trim().to_string();
 
-            // Treat as success only when exit code is 0 AND output contains no failure markers.
             let has_failure = trimmed.contains("[Fail]")
                 || trimmed.contains("not user mountable")
                 || trimmed.contains("Operation not permitted")
-                || trimmed.contains("debug mode");
+                || trimmed.contains("debug mode")
+                || trimmed.contains("Read-only file system");
             let success = out.status.success() && !has_failure;
 
             let info = if trimmed.is_empty() {
-                if success {
-                    "Mount successful".to_string()
-                } else {
-                    "Mount failed (no output)".to_string()
-                }
+                if success { "Mount successful".to_string() }
+                else { "Mount failed (no output)".to_string() }
             } else {
                 trimmed
             };
 
             (success, info)
         }
-        Err(e) => (false, format!("Failed to run hdc target mount: {}", e)),
+        Err(e) => (false, format!("Failed to run hdc: {}", e)),
+    }
+}
+
+/// Attempt to remount a device by running both commands sequentially:
+/// 1. `hdc -t <key> shell mount -o rw,remount /`
+/// 2. `hdc -t <key> target mount`
+/// Both are required for a successful remount.
+/// Updates DEVICE_REMOUNT_STATUS and re-emits hdc_devices_changed.
+async fn attempt_remount(connect_key: String, app: AppHandle) {
+    // Step 1: shell mount -o rw,remount /
+    let (ok1, info1) = try_remount_cmd(
+        &connect_key,
+        &["-t", &connect_key, "shell", "mount", "-o", "rw,remount", "/"],
+    ).await;
+
+    // Step 2: hdc target mount
+    let (ok2, info2) = try_remount_cmd(
+        &connect_key,
+        &["-t", &connect_key, "target", "mount"],
+    ).await;
+
+    let is_remounted = ok1 && ok2;
+    let info = if is_remounted {
+        info2
+    } else if !ok1 {
+        info1
+    } else {
+        info2
     };
 
     if let Ok(mut map) = DEVICE_REMOUNT_STATUS.lock() {

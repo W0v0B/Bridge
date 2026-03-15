@@ -54,6 +54,7 @@ pub fn run() {
             // HDC device commands
             get_ohos_devices,
             connect_ohos_device,
+            disconnect_ohos_device,
             // HDC shell commands
             run_hdc_shell_command,
             start_hdc_shell_stream,
@@ -245,6 +246,11 @@ async fn get_ohos_devices() -> Result<Vec<hdc_device::OhosDevice>, String> {
 #[tauri::command]
 async fn connect_ohos_device(addr: String) -> Result<String, String> {
     hdc_device::connect_device(&addr).await
+}
+
+#[tauri::command]
+async fn disconnect_ohos_device(addr: String) -> Result<String, String> {
+    hdc_device::disconnect_device(&addr).await
 }
 
 // ── HDC Shell Commands ──

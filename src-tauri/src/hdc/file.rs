@@ -115,11 +115,26 @@ pub async fn send_files(
             .map_err(|e| format!("Failed to run hdc file send: {}", e))?
             .status;
 
-        // Emit 100% on completion
+        if !status.success() {
+            let _ = app.emit(
+                "transfer_progress",
+                TransferProgress {
+                    id,
+                    file_name: file_name.clone(),
+                    transferred: 0,
+                    total: 0,
+                    percent: -1.0,
+                    speed: "failed".to_string(),
+                },
+            );
+            return Err(format!("hdc file send failed for {}", file_name));
+        }
+
+        // Emit 100% only on success
         let _ = app.emit(
             "transfer_progress",
             TransferProgress {
-                id: id.clone(),
+                id,
                 file_name: file_name.clone(),
                 transferred: 0,
                 total: 0,
@@ -127,10 +142,6 @@ pub async fn send_files(
                 speed: String::new(),
             },
         );
-
-        if !status.success() {
-            return Err(format!("hdc file send failed for {}", file_name));
-        }
     }
     Ok(())
 }
@@ -170,6 +181,21 @@ pub async fn recv_file(
         .map_err(|e| format!("Failed to run hdc file recv: {}", e))?
         .status;
 
+    if !status.success() {
+        let _ = app.emit(
+            "transfer_progress",
+            TransferProgress {
+                id,
+                file_name: file_name.clone(),
+                transferred: 0,
+                total: 0,
+                percent: -1.0,
+                speed: "failed".to_string(),
+            },
+        );
+        return Err(format!("hdc file recv failed for {}", file_name));
+    }
+
     let _ = app.emit(
         "transfer_progress",
         TransferProgress {
@@ -181,10 +207,6 @@ pub async fn recv_file(
             speed: String::new(),
         },
     );
-
-    if !status.success() {
-        return Err(format!("hdc file recv failed for {}", file_name));
-    }
 
     Ok(())
 }

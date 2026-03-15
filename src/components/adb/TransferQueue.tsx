@@ -18,8 +18,8 @@ export function TransferQueue() {
       return next;
     });
 
-    // Auto-remove completed transfers after 3 seconds
-    if (progress.percent >= 100) {
+    // Auto-remove completed or failed transfers after 3 seconds
+    if (progress.percent >= 100 || progress.percent < 0) {
       const existing = timersRef.current.get(progress.id);
       if (existing) clearTimeout(existing);
 
@@ -69,10 +69,10 @@ export function TransferQueue() {
               }
             />
             <Progress
-              percent={Math.round(item.percent)}
+              percent={item.percent < 0 ? 100 : Math.round(item.percent)}
               size="small"
               style={{ width: 200 }}
-              status={item.percent >= 100 ? "success" : "active"}
+              status={item.percent < 0 ? "exception" : item.percent >= 100 ? "success" : "active"}
             />
           </List.Item>
         )}
