@@ -64,6 +64,15 @@ export const useConfigStore = create<ConfigState>()(
       },
       setConfig: (partial) => set((state) => ({ config: { ...state.config, ...partial } })),
     }),
-    { name: "bridge-config" }
+    {
+      name: "bridge-config",
+      merge: (persisted, current) => {
+        const p = persisted as Partial<ConfigState> | undefined;
+        return {
+          ...current,
+          config: { ...current.config, ...(p?.config ?? {}) },
+        };
+      },
+    }
   )
 );

@@ -13,7 +13,6 @@ import { startShellStream } from "../../utils/adb";
 import { startHdcShellStream } from "../../utils/hdc";
 import { writeToPort } from "../../utils/serial";
 import { runLocalScript } from "../../utils/script";
-import { listen } from "@tauri-apps/api/event";
 
 const { Text } = Typography;
 
@@ -72,21 +71,6 @@ export function QuickCommandsPanel({ onOutput, onStreamStart }: QuickCommandsPan
   const selectedDevice = devices.find((d) => d.id === selectedDeviceId);
   const deviceType = getDeviceType(selectedDevice);
   const commands = commandsByType[deviceType] ?? [];
-
-  // Listen for script_output / script_exit events
-  useEffect(() => {
-    const unlistenOutput = listen<{ id: string; data: string }>("script_output", (event) => {
-      onOutputRef.current?.(event.payload.data, event.payload.id);
-    });
-    const unlistenExit = listen<{ id: string; code: number }>("script_exit", (event) => {
-      const exitLine = `\n[Script exited with code ${event.payload.code}]\n`;
-      onOutputRef.current?.(exitLine, event.payload.id);
-    });
-    return () => {
-      unlistenOutput.then((f) => f());
-      unlistenExit.then((f) => f());
-    };
-  }, []);
 
   const getEntry = (deviceId: string): SeqEntry => {
     if (!seqMap.current.has(deviceId)) {

@@ -365,6 +365,7 @@ export function HdcFileManager() {
       dataIndex: "name",
       key: "name",
       sorter: true,
+      sortDirections: ["ascend" as const, "descend" as const, "ascend" as const],
       sortOrder: sortField === "name" ? sortOrder : undefined,
       render: (name: string, record: FileEntry) => (
         <Space>
@@ -397,6 +398,7 @@ export function HdcFileManager() {
       key: "modified",
       width: 160,
       sorter: true,
+      sortDirections: ["ascend" as const, "descend" as const, "ascend" as const],
       sortOrder: sortField === "modified" ? sortOrder : undefined,
     },
   ];
@@ -435,12 +437,12 @@ export function HdcFileManager() {
       <div style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 4, marginBottom: 6, flexWrap: "wrap" }}>
         {quickPaths.map((qp, idx) => (
           <Tag
-            key={idx}
+            key={`${qp.label}:${qp.path}`}
             color={currentPath === qp.path ? "blue" : undefined}
             style={{ cursor: "pointer", margin: 0 }}
             onClick={() => navigateTo(qp.path)}
             closable
-            onClose={(e) => { e.stopPropagation(); handleRemoveQuickPath(idx); }}
+            onClose={(e) => { e.preventDefault(); e.stopPropagation(); handleRemoveQuickPath(idx); }}
           >
             {qp.label}
           </Tag>
