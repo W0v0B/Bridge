@@ -31,6 +31,14 @@ pub struct HilogBatch {
     pub entries: Vec<HilogEntry>,
 }
 
+/// Emitted when a hilog or tlogcat process exits.
+#[derive(Debug, Clone, Serialize)]
+pub struct HilogExit {
+    pub connect_key: String,
+    pub mode: String,
+    pub code: Option<i32>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct HilogFilter {
     pub level: Option<String>,
@@ -61,6 +69,26 @@ fn parse_hilog_line(line: &str) -> Option<HilogEntry> {
         level: caps[4].to_string(),
         tag: caps[5].trim().to_string(),
         message: caps[6].to_string(),
+    })
+}
+
+/// Parse a tlogcat line with fallback: unparseable non-empty lines become INFO entries.
+/// This ensures error messages like "/bin/sh: tlogcat: inaccessible or not found" are shown.
+fn parse_tlogcat_line(line: &str) -> Option<HilogEntry> {
+    if let Some(entry) = parse_hilog_line(line) {
+        return Some(entry);
+    }
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(HilogEntry {
+        timestamp: String::new(),
+        pid: String::new(),
+        tid: String::new(),
+        level: "I".to_string(),
+        tag: String::new(),
+        message: trimmed.to_string(),
     })
 }
 
@@ -102,7 +130,7 @@ pub async fn start(
     let mut child = cmd(hdc_path())
         .args(["-t", connect_key, "shell", "hilog"])
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
         .spawn()
         .map_err(|e| format!("Failed to start hilog: {}", e))?;
 
@@ -114,6 +142,34 @@ pub async fn start(
     }
 
     let connect_key_owned = connect_key.to_string();
+
+    // Spawn a task to read stderr and emit as error-level log entries
+    if let Some(stderr) = child.stderr.take() {
+        let stderr_key = connect_key_owned.clone();
+        let stderr_app = app.clone();
+        tokio::spawn(async move {
+            let reader = BufReader::new(stderr);
+            let mut lines = reader.lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                let entry = HilogEntry {
+                    timestamp: String::new(),
+                    pid: String::new(),
+                    tid: String::new(),
+                    level: "E".to_string(),
+                    tag: "hilog-stderr".to_string(),
+                    message: trimmed.to_string(),
+                };
+                let _ = stderr_app.emit("hilog_lines", HilogBatch {
+                    connect_key: stderr_key.clone(),
+                    entries: vec![entry],
+                });
+            }
+        });
+    }
 
     tokio::spawn(async move {
         if let Some(stdout) = child.stdout.take() {
@@ -177,8 +233,17 @@ pub async fn start(
             }
         }
 
+        let exit_status = child.wait().await.ok();
+        let code = exit_status.and_then(|s| s.code());
+
         let mut procs = HILOG_PROCESSES.lock().unwrap();
         procs.remove(&format!("hilog:{}", connect_key_owned));
+
+        let _ = app.emit("hilog_exit", HilogExit {
+            connect_key: connect_key_owned,
+            mode: "hilog".to_string(),
+            code,
+        });
     });
 
     Ok(())
@@ -291,7 +356,7 @@ pub async fn start_tlogcat(
 
                 match maybe_line {
                     Ok(Ok(Some(line))) => {
-                        if let Some(entry) = parse_hilog_line(&line) {
+                        if let Some(entry) = parse_tlogcat_line(&line) {
                             batch.push(entry);
                         }
                         if batch.len() >= 64 || last_flush.elapsed() >= flush_interval {
@@ -338,8 +403,17 @@ pub async fn start_tlogcat(
             }
         }
 
+        let exit_status = child.wait().await.ok();
+        let code = exit_status.and_then(|s| s.code());
+
         let mut procs = HILOG_PROCESSES.lock().unwrap();
         procs.remove(&format!("tlogcat:{}", connect_key_owned));
+
+        let _ = app.emit("hilog_exit", HilogExit {
+            connect_key: connect_key_owned,
+            mode: "tlogcat".to_string(),
+            code,
+        });
     });
 
     Ok(())

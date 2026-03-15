@@ -108,7 +108,7 @@ export function HdcCatModal({ open, onClose, connectKey, path }: HdcCatModalProp
       title={fileName}
       width={720}
       footer={footer}
-      destroyOnClose
+      destroyOnHidden
       maskClosable
     >
       <Space wrap style={{ marginBottom: 10 }}>

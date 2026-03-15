@@ -543,33 +543,33 @@ export function FileManager() {
         </div>
       </div>
 
-      {/* Scrollable file list with drag-drop overlay */}
-      <div style={{ flex: 1, overflow: "auto", position: "relative" }}>
-        {/* Drag-drop overlay */}
-        {dragOver && (
-          <div
-            style={{
-              position: "absolute",
-              inset: 0,
-              zIndex: 10,
-              background: "rgba(22, 119, 255, 0.08)",
-              border: "2px dashed var(--accent, #1677ff)",
-              borderRadius: 8,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              pointerEvents: "none",
-            }}
-          >
-            <div style={{ textAlign: "center", color: "var(--accent, #1677ff)" }}>
-              <UploadOutlined style={{ fontSize: 36 }} />
-              <div style={{ marginTop: 8, fontSize: 14 }}>
-                Drop files to upload to {currentPath}
-              </div>
+      {/* Drag-drop overlay — covers the entire component */}
+      {dragOver && (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            zIndex: 10,
+            background: "rgba(22, 119, 255, 0.08)",
+            border: "2px dashed var(--accent, #1677ff)",
+            borderRadius: 8,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            pointerEvents: "none",
+          }}
+        >
+          <div style={{ textAlign: "center", color: "var(--accent, #1677ff)" }}>
+            <UploadOutlined style={{ fontSize: 36 }} />
+            <div style={{ marginTop: 8, fontSize: 14 }}>
+              Drop files to upload to {currentPath}
             </div>
           </div>
-        )}
+        </div>
+      )}
 
+      {/* Scrollable file list */}
+      <div style={{ flex: 1, overflow: "auto" }}>
         <Table
           dataSource={sortedFiles}
           columns={columns}
@@ -598,6 +598,7 @@ export function FileManager() {
         onClose={() => setUploadModalOpen(false)}
         defaultPath={currentPath}
         onUpload={handleUpload}
+        quickPaths={quickPaths}
       />
 
       {/* File viewer */}

@@ -74,6 +74,26 @@ export function useHdcTlogcatEvents(onBatch: (batch: HilogBatch) => void) {
   }, []);
 }
 
+export interface HilogExitEvent {
+  connect_key: string;
+  mode: string;
+  code: number | null;
+}
+
+export function useHilogExitEvents(callback: (event: HilogExitEvent) => void) {
+  const callbackRef = useRef(callback);
+  callbackRef.current = callback;
+
+  useEffect(() => {
+    const unlisten = listen<HilogExitEvent>("hilog_exit", (event) => {
+      callbackRef.current(event.payload);
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
+}
+
 export function useHilogEvents(onBatch: (batch: HilogBatch) => void) {
   const callbackRef = useRef(onBatch);
   callbackRef.current = onBatch;

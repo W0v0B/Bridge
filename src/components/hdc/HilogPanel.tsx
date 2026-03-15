@@ -19,7 +19,8 @@ import {
 import { save } from "@tauri-apps/plugin-dialog";
 import { useDeviceStore } from "../../store/deviceStore";
 import { useConfigStore } from "../../store/configStore";
-import { useHilogEvents, useHdcTlogcatEvents } from "../../hooks/useHdcEvents";
+import { useHilogEvents, useHdcTlogcatEvents, useHilogExitEvents } from "../../hooks/useHdcEvents";
+import type { HilogExitEvent } from "../../hooks/useHdcEvents";
 import { startHilog, stopHilog, startHdcTlogcat, stopHdcTlogcat, clearHilog, exportHilog } from "../../utils/hdc";
 import type { HilogEntry, HilogFilter, HilogBatch } from "../../types/hdc";
 
@@ -296,6 +297,25 @@ export function HilogPanel() {
         if (runningMapRef.current[key]) addEntries(batch.connect_key, "tlogcat", batch.entries);
       },
       [addEntries]
+    )
+  );
+
+  useHilogExitEvents(
+    useCallback(
+      (event: HilogExitEvent) => {
+        const rk = `${event.connect_key}:${event.mode}`;
+        if (runningMapRef.current[rk]) {
+          setModeRunning(event.mode, false, event.connect_key);
+          if (event.code !== 0) {
+            message.warning(
+              `${event.mode} exited` +
+                (event.code !== null ? ` with code ${event.code}` : "") +
+                " — the command may not be supported on this device"
+            );
+          }
+        }
+      },
+      [message]
     )
   );
 

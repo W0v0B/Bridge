@@ -111,7 +111,7 @@ export function CatModal({ open, onClose, serial, path }: CatModalProps) {
       title={fileName}
       width={720}
       footer={footer}
-      destroyOnClose
+      destroyOnHidden
       maskClosable
     >
       {/* Settings */}

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { Modal, Input, Button, List, Typography, Space } from "antd";
+import { Modal, Input, Button, List, Typography, Space, Tag } from "antd";
 import {
   InboxOutlined,
   FolderOpenOutlined,
@@ -11,11 +11,17 @@ import { listen } from "@tauri-apps/api/event";
 
 const { Text } = Typography;
 
+interface QuickAccessPath {
+  label: string;
+  path: string;
+}
+
 interface UploadModalProps {
   open: boolean;
   onClose: () => void;
   defaultPath: string;
   onUpload: (localPaths: string[], remotePath: string) => Promise<void>;
+  quickPaths?: QuickAccessPath[];
 }
 
 export function UploadModal({
@@ -23,6 +29,7 @@ export function UploadModal({
   onClose,
   defaultPath,
   onUpload,
+  quickPaths,
 }: UploadModalProps) {
   const [files, setFiles] = useState<string[]>([]);
   const [remotePath, setRemotePath] = useState(defaultPath);
@@ -126,7 +133,7 @@ export function UploadModal({
       onCancel={onClose}
       title="Upload Files"
       width={560}
-      destroyOnClose
+      destroyOnHidden
       footer={
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <Text type="secondary" style={{ fontSize: 12 }}>
@@ -152,6 +159,20 @@ export function UploadModal({
         <Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 4 }}>
           Destination path on device
         </Text>
+        {quickPaths && quickPaths.length > 0 && (
+          <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 6 }}>
+            {quickPaths.map((qp) => (
+              <Tag
+                key={`${qp.label}:${qp.path}`}
+                color={remotePath === qp.path ? "blue" : undefined}
+                style={{ cursor: "pointer", margin: 0 }}
+                onClick={() => setRemotePath(qp.path)}
+              >
+                {qp.label}
+              </Tag>
+            ))}
+          </div>
+        )}
         <Input
           value={remotePath}
           onChange={(e) => setRemotePath(e.target.value)}
