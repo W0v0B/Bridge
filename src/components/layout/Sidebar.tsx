@@ -7,6 +7,8 @@ import {
   ApiOutlined,
   MobileOutlined,
   DisconnectOutlined,
+  LeftOutlined,
+  RightOutlined,
 } from "@ant-design/icons";
 import { useDeviceStore } from "../../store/deviceStore";
 import { disconnectDevice, getDevices } from "../../utils/adb";
@@ -28,9 +30,11 @@ interface SidebarProps {
   onConnect: () => void;
   onRefresh: () => void;
   onSettings: () => void;
+  collapsed: boolean;
+  onCollapse: (collapsed: boolean) => void;
 }
 
-export function Sidebar({ onConnect, onRefresh, onSettings }: SidebarProps) {
+export function Sidebar({ onConnect, onRefresh, onSettings, collapsed, onCollapse }: SidebarProps) {
   const devices = useDeviceStore((s) => s.devices);
   const selectedDeviceId = useDeviceStore((s) => s.selectedDeviceId);
   const selectDevice = useDeviceStore((s) => s.selectDevice);
@@ -66,6 +70,35 @@ export function Sidebar({ onConnect, onRefresh, onSettings }: SidebarProps) {
       device.serial.includes(":") ||
       device.type === "serial" ||
       device.type === "ohos";
+
+    if (collapsed) {
+      return (
+        <Tooltip key={device.id} title={device.name} placement="right">
+          <div
+            onClick={() => selectDevice(device.id)}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: "6px 0",
+              cursor: "pointer",
+              borderRadius: 6,
+              background: isSelected ? "var(--selected-bg)" : "transparent",
+              marginBottom: 2,
+            }}
+          >
+            <span
+              style={{
+                width: 8,
+                height: 8,
+                borderRadius: "50%",
+                background: dotColor,
+              }}
+            />
+          </div>
+        </Tooltip>
+      );
+    }
 
     return (
       <div
@@ -122,32 +155,41 @@ export function Sidebar({ onConnect, onRefresh, onSettings }: SidebarProps) {
     items: ConnectedDevice[]
   ) => (
     <div style={{ marginBottom: 8 }}>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 6,
-          padding: "4px 12px",
-          color: "var(--text-secondary)",
-          fontSize: 12,
-          fontWeight: 600,
-          textTransform: "uppercase",
-          letterSpacing: 0.5,
-        }}
-      >
-        {icon}
-        {title}
-      </div>
+      {!collapsed && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            padding: "4px 12px",
+            color: "var(--text-secondary)",
+            fontSize: 12,
+            fontWeight: 600,
+            textTransform: "uppercase",
+            letterSpacing: 0.5,
+          }}
+        >
+          {icon}
+          {title}
+        </div>
+      )}
+      {collapsed && items.length > 0 && (
+        <Tooltip title={title} placement="right">
+          <div style={{ textAlign: "center", padding: "4px 0", color: "var(--text-secondary)", fontSize: 11 }}>
+            {icon}
+          </div>
+        </Tooltip>
+      )}
       {items.length > 0 ? (
         items.map(renderDevice)
-      ) : (
+      ) : !collapsed ? (
         <Text
           type="secondary"
           style={{ fontSize: 12, padding: "4px 12px 4px 26px", display: "block" }}
         >
           No devices
         </Text>
-      )}
+      ) : null}
     </div>
   );
 
@@ -164,29 +206,35 @@ export function Sidebar({ onConnect, onRefresh, onSettings }: SidebarProps) {
         style={{
           display: "flex",
           alignItems: "center",
-          justifyContent: "space-between",
-          padding: "12px 12px 8px",
+          justifyContent: collapsed ? "center" : "space-between",
+          padding: collapsed ? "12px 4px 8px" : "12px 12px 8px",
         }}
       >
-        <Text strong style={{ fontSize: 16 }}>
-          Bridge
-        </Text>
+        {!collapsed && (
+          <Text strong style={{ fontSize: 16 }}>
+            Bridge
+          </Text>
+        )}
         <div style={{ display: "flex", gap: 6 }}>
-          <Tooltip title="Refresh devices">
-            <Button
-              size="small"
-              icon={<ReloadOutlined />}
-              onClick={onRefresh}
-            />
-          </Tooltip>
-          <Tooltip title="Connect device">
-            <Button
-              type="primary"
-              size="small"
-              icon={<PlusOutlined />}
-              onClick={onConnect}
-            />
-          </Tooltip>
+          {!collapsed && (
+            <>
+              <Tooltip title="Refresh devices">
+                <Button
+                  size="small"
+                  icon={<ReloadOutlined />}
+                  onClick={onRefresh}
+                />
+              </Tooltip>
+              <Tooltip title="Connect device">
+                <Button
+                  type="primary"
+                  size="small"
+                  icon={<PlusOutlined />}
+                  onClick={onConnect}
+                />
+              </Tooltip>
+            </>
+          )}
         </div>
       </div>
 
@@ -209,22 +257,46 @@ export function Sidebar({ onConnect, onRefresh, onSettings }: SidebarProps) {
         )}
       </div>
 
-      {/* Settings */}
+      {/* Bottom: Settings + collapse toggle */}
       <div
         style={{
           padding: "8px 12px",
           borderTop: "1px solid var(--border)",
+          display: "flex",
+          flexDirection: "column",
+          gap: 4,
         }}
       >
-        <Button
-          type="text"
-          icon={<SettingOutlined />}
-          block
-          style={{ textAlign: "left" }}
-          onClick={onSettings}
-        >
-          Settings
-        </Button>
+        {!collapsed && (
+          <Button
+            type="text"
+            icon={<SettingOutlined />}
+            block
+            style={{ textAlign: "left" }}
+            onClick={onSettings}
+          >
+            Settings
+          </Button>
+        )}
+        {collapsed && (
+          <Tooltip title="Settings" placement="right">
+            <Button
+              type="text"
+              icon={<SettingOutlined />}
+              block
+              onClick={onSettings}
+            />
+          </Tooltip>
+        )}
+        <Tooltip title={collapsed ? "Expand sidebar" : "Collapse sidebar"} placement="right">
+          <Button
+            type="text"
+            icon={collapsed ? <RightOutlined /> : <LeftOutlined />}
+            block
+            size="small"
+            onClick={() => onCollapse(!collapsed)}
+          />
+        </Tooltip>
       </div>
     </div>
   );

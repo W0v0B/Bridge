@@ -60,6 +60,20 @@ export function useHdcShellExit(callback: (event: HdcShellExitEvent) => void) {
   }, []);
 }
 
+export function useHdcTlogcatEvents(onBatch: (batch: HilogBatch) => void) {
+  const callbackRef = useRef(onBatch);
+  callbackRef.current = onBatch;
+
+  useEffect(() => {
+    const unlisten = listen<HilogBatch>("hdc_tlogcat_lines", (event) => {
+      callbackRef.current(event.payload);
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
+}
+
 export function useHilogEvents(onBatch: (batch: HilogBatch) => void) {
   const callbackRef = useRef(onBatch);
   callbackRef.current = onBatch;

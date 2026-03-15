@@ -68,6 +68,8 @@ pub fn run() {
             // HDC hilog commands
             start_hilog,
             stop_hilog,
+            start_hdc_tlogcat,
+            stop_hdc_tlogcat,
             clear_hilog,
             export_hilog,
             // HDC app commands
@@ -327,6 +329,19 @@ async fn start_hilog(
 #[tauri::command]
 async fn stop_hilog(connect_key: String) -> Result<(), String> {
     hilog::stop(&connect_key).await
+}
+
+#[tauri::command]
+async fn start_hdc_tlogcat(
+    connect_key: String,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    hilog::start_tlogcat(&connect_key, app).await
+}
+
+#[tauri::command]
+async fn stop_hdc_tlogcat(connect_key: String) -> Result<(), String> {
+    hilog::stop_tlogcat(&connect_key).await
 }
 
 #[tauri::command]

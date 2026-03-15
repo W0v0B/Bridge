@@ -58,6 +58,14 @@ export async function stopHilog(connectKey: string) {
   return invoke("stop_hilog", { connectKey });
 }
 
+export async function startHdcTlogcat(connectKey: string) {
+  return invoke("start_hdc_tlogcat", { connectKey });
+}
+
+export async function stopHdcTlogcat(connectKey: string) {
+  return invoke("stop_hdc_tlogcat", { connectKey });
+}
+
 export async function clearHilog(connectKey: string) {
   return invoke("clear_hilog", { connectKey });
 }

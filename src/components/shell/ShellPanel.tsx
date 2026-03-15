@@ -3,6 +3,7 @@ import { App, Input, Button, InputNumber, Tooltip, Typography } from "antd";
 import {
   StopOutlined, ClearOutlined, SettingOutlined,
   DownloadOutlined, FileAddOutlined, BgColorsOutlined,
+  DoubleRightOutlined, DoubleLeftOutlined,
 } from "@ant-design/icons";
 import { save } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
@@ -40,6 +41,7 @@ export function ShellPanel() {
   const [showSettings, setShowSettings] = useState(false);
   const [logToFile, setLogToFile] = useState(false);
   const [ansiColor, setAnsiColor] = useState(true);
+  const [quickCmdCollapsed, setQuickCmdCollapsed] = useState(false);
   const ansiColorMap = useRef<Record<string, boolean>>({});
 
   const outputRef = useRef<HTMLDivElement>(null);
@@ -496,27 +498,40 @@ export function ShellPanel() {
                 Stop
               </Button>
             )}
+            <Tooltip title={quickCmdCollapsed ? "Show Quick Commands" : "Hide Quick Commands"}>
+              <Button
+                size="small"
+                type="text"
+                icon={quickCmdCollapsed ? <DoubleLeftOutlined /> : <DoubleRightOutlined />}
+                style={{ color: "var(--term-text)", opacity: 0.6 }}
+                onClick={() => setQuickCmdCollapsed((v) => !v)}
+              />
+            </Tooltip>
           </div>
         </div>
       </Panel>
 
-      <PanelResizeHandle
-        style={{
-          width: 4,
-          background: "var(--border)",
-          cursor: "col-resize",
-        }}
-      />
+      {!quickCmdCollapsed && (
+        <>
+          <PanelResizeHandle
+            style={{
+              width: 4,
+              background: "var(--border)",
+              cursor: "col-resize",
+            }}
+          />
 
-      <Panel defaultSize={30} minSize={20}>
-        <QuickCommandsPanel
-          onOutput={appendOutput}
-          onStreamStart={(deviceId) => {
-            const id = deviceId ?? selectedDevice?.id;
-            if (id) setDeviceRunning(id, true);
-          }}
-        />
-      </Panel>
+          <Panel defaultSize={30} minSize={20}>
+            <QuickCommandsPanel
+              onOutput={appendOutput}
+              onStreamStart={(deviceId) => {
+                const id = deviceId ?? selectedDevice?.id;
+                if (id) setDeviceRunning(id, true);
+              }}
+            />
+          </Panel>
+        </>
+      )}
     </PanelGroup>
     </div>
   );

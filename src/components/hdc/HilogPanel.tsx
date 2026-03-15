@@ -5,6 +5,7 @@ import {
   Select,
   Button,
   Space,
+  Segmented,
   Tooltip,
   InputNumber,
 } from "antd";
@@ -18,8 +19,8 @@ import {
 import { save } from "@tauri-apps/plugin-dialog";
 import { useDeviceStore } from "../../store/deviceStore";
 import { useConfigStore } from "../../store/configStore";
-import { useHilogEvents } from "../../hooks/useHdcEvents";
-import { startHilog, stopHilog, clearHilog, exportHilog } from "../../utils/hdc";
+import { useHilogEvents, useHdcTlogcatEvents } from "../../hooks/useHdcEvents";
+import { startHilog, stopHilog, startHdcTlogcat, stopHdcTlogcat, clearHilog, exportHilog } from "../../utils/hdc";
 import type { HilogEntry, HilogFilter, HilogBatch } from "../../types/hdc";
 
 const levelClassMap: Record<string, string> = {
@@ -42,7 +43,7 @@ function formatEntry(e: HilogEntry): string {
   return `<div class="${cls}">${ts}${pid}${tid}<b>${e.level}/${esc(e.tag)}:</b> ${esc(e.message)}</div>`;
 }
 
-interface DeviceBuffer {
+interface ModeBuffer {
   entries: HilogEntry[];
   html: string;
 }
@@ -57,13 +58,16 @@ export function HilogPanel() {
   const logcatMaxLines = useConfigStore((s) => s.config.logcatMaxLines);
   const setConfig = useConfigStore((s) => s.setConfig);
 
-  // Per-device running state: connect_key → boolean
+  const [mode, setMode] = useState<"hilog" | "tlogcat">("hilog");
+  // Per-device-per-mode running state: "connect_key:mode" → boolean
   const [runningMap, setRunningMap] = useState<Record<string, boolean>>({});
   const runningMapRef = useRef<Record<string, boolean>>({});
-  const running = selectedDevice ? (runningMap[selectedDevice] ?? false) : false;
+  const runningKey = selectedDevice ? `${selectedDevice}:${mode}` : mode;
+  const running = runningMap[runningKey] ?? false;
 
-  const setDeviceRunning = (key: string, val: boolean) => {
-    runningMapRef.current = { ...runningMapRef.current, [key]: val };
+  const setModeRunning = (m: string, val: boolean, key?: string) => {
+    const rk = key ? `${key}:${m}` : m;
+    runningMapRef.current = { ...runningMapRef.current, [rk]: val };
     setRunningMap({ ...runningMapRef.current });
   };
 
@@ -75,17 +79,25 @@ export function HilogPanel() {
   const [entryCount, setEntryCount] = useState(0);
   const [autoScroll, setAutoScroll] = useState(true);
 
-  // Per-device log buffers
-  const deviceBuffers = useRef<Record<string, DeviceBuffer>>({});
+  // Per-device-per-mode log buffers
+  const buffers = useRef<Record<string, ModeBuffer>>({});
   const selectedDeviceRef = useRef(selectedDevice);
   selectedDeviceRef.current = selectedDevice;
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
 
-  const getOrCreateBuffer = useCallback((key: string): DeviceBuffer => {
-    if (!deviceBuffers.current[key]) {
-      deviceBuffers.current[key] = { entries: [], html: "" };
+  const getOrCreateBuffer = useCallback((key: string, m: string): ModeBuffer => {
+    const bk = `${key}:${m}`;
+    if (!buffers.current[bk]) {
+      buffers.current[bk] = { entries: [], html: "" };
     }
-    return deviceBuffers.current[key];
+    return buffers.current[bk];
   }, []);
+
+  const getBuffer = useCallback(() => {
+    if (!selectedDevice) return { entries: [], html: "" } as ModeBuffer;
+    return getOrCreateBuffer(selectedDevice, mode);
+  }, [selectedDevice, mode, getOrCreateBuffer]);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -100,7 +112,8 @@ export function HilogPanel() {
   const flushToDOM = useCallback(() => {
     const key = selectedDeviceRef.current;
     if (!key) return;
-    const buf = deviceBuffers.current[key];
+    const bk = `${key}:${modeRef.current}`;
+    const buf = buffers.current[bk];
     if (!buf) return;
     if (contentRef.current) {
       contentRef.current.innerHTML = buf.html;
@@ -211,7 +224,7 @@ export function HilogPanel() {
   }, []);
 
   const rebuildHtml = useCallback(
-    (buf: DeviceBuffer) => {
+    (buf: ModeBuffer) => {
       let html = "";
       for (const entry of buf.entries) {
         if (passesFilter(entry)) {
@@ -223,31 +236,33 @@ export function HilogPanel() {
     [passesFilter, trimHtml]
   );
 
-  // When filter or device changes, rebuild display
+  // When filter/mode/device changes, rebuild display
   useEffect(() => {
     if (!selectedDevice) return;
-    const buf = deviceBuffers.current[selectedDevice];
+    const bk = `${selectedDevice}:${mode}`;
+    const buf = buffers.current[bk];
     if (buf) {
       rebuildHtml(buf);
     }
     flushToDOM();
-  }, [level, filterText, useRegex, caseSensitive, exactMatch, selectedDevice, rebuildHtml, flushToDOM]);
+  }, [level, filterText, useRegex, caseSensitive, exactMatch, mode, selectedDevice, rebuildHtml, flushToDOM]);
 
   const addEntries = useCallback(
-    (connectKey: string, batch: HilogEntry[]) => {
+    (connectKey: string, targetMode: "hilog" | "tlogcat", batch: HilogEntry[]) => {
       const max = maxLinesRef.current;
-      if (!deviceBuffers.current[connectKey]) {
-        deviceBuffers.current[connectKey] = { entries: [], html: "" };
+      const bk = `${connectKey}:${targetMode}`;
+      if (!buffers.current[bk]) {
+        buffers.current[bk] = { entries: [], html: "" };
       }
-      const buf = deviceBuffers.current[connectKey];
+      const buf = buffers.current[bk];
 
       buf.entries.push(...batch);
       if (max > 0 && buf.entries.length > max) {
         buf.entries = buf.entries.slice(-max);
       }
 
-      // Only build incremental HTML if this is the currently displayed device
-      if (connectKey === selectedDeviceRef.current) {
+      // Only build incremental HTML if this is the currently displayed device+mode
+      if (connectKey === selectedDeviceRef.current && targetMode === modeRef.current) {
         let newHtml = "";
         for (const entry of batch) {
           if (passesFilter(entry)) {
@@ -267,8 +282,18 @@ export function HilogPanel() {
   useHilogEvents(
     useCallback(
       (batch: HilogBatch) => {
-        if (!runningMapRef.current[batch.connect_key]) return;
-        addEntries(batch.connect_key, batch.entries);
+        const key = `${batch.connect_key}:hilog`;
+        if (runningMapRef.current[key]) addEntries(batch.connect_key, "hilog", batch.entries);
+      },
+      [addEntries]
+    )
+  );
+
+  useHdcTlogcatEvents(
+    useCallback(
+      (batch: HilogBatch) => {
+        const key = `${batch.connect_key}:tlogcat`;
+        if (runningMapRef.current[key]) addEntries(batch.connect_key, "tlogcat", batch.entries);
       },
       [addEntries]
     )
@@ -279,38 +304,48 @@ export function HilogPanel() {
       message.warning("Select a device first");
       return;
     }
-    setDeviceRunning(selectedDevice, true);
-    const filter: HilogFilter = {
-      level: level === "All" ? null : level,
-      keyword: filterText || null,
-    };
+    setModeRunning(mode, true, selectedDevice);
     try {
-      await startHilog(selectedDevice, filter);
+      if (mode === "hilog") {
+        const filter: HilogFilter = {
+          level: level === "All" ? null : level,
+          keyword: filterText || null,
+        };
+        await startHilog(selectedDevice, filter);
+      } else {
+        await startHdcTlogcat(selectedDevice);
+      }
     } catch (e) {
-      setDeviceRunning(selectedDevice, false);
+      setModeRunning(mode, false, selectedDevice);
       message.error(String(e));
     }
   };
 
   const handleStop = async () => {
     if (!selectedDevice) return;
-    setDeviceRunning(selectedDevice, false);
+    setModeRunning(mode, false, selectedDevice);
     try {
-      await stopHilog(selectedDevice);
+      if (mode === "hilog") {
+        await stopHilog(selectedDevice);
+      } else {
+        await stopHdcTlogcat(selectedDevice);
+      }
     } catch {
       // ignore
     }
   };
 
-  const handleClear = async () => {
-    if (selectedDevice) {
-      const buf = getOrCreateBuffer(selectedDevice);
-      buf.entries = [];
-      buf.html = "";
-    }
+  const clearDisplay = () => {
+    const buf = getBuffer();
+    buf.entries = [];
+    buf.html = "";
     if (contentRef.current) contentRef.current.innerHTML = "";
     setEntryCount(0);
-    if (selectedDevice) {
+  };
+
+  const handleClear = async () => {
+    clearDisplay();
+    if (selectedDevice && mode === "hilog") {
       try {
         await clearHilog(selectedDevice);
       } catch (e) {
@@ -320,15 +355,13 @@ export function HilogPanel() {
   };
 
   const handleExport = async () => {
-    if (!selectedDevice) return;
-    const buf = deviceBuffers.current[selectedDevice];
-    const filtered = buf ? buf.entries.filter(passesFilter) : [];
+    const filtered = getBuffer().entries.filter(passesFilter);
     if (filtered.length === 0) {
       message.warning("No entries to export (check your filter)");
       return;
     }
     const path = await save({
-      defaultPath: "hilog_export.txt",
+      defaultPath: `${mode}_export.txt`,
       filters: [{ name: "Text", extensions: ["txt"] }],
     });
     if (!path) return;
@@ -338,6 +371,10 @@ export function HilogPanel() {
     } catch (e) {
       message.error(String(e));
     }
+  };
+
+  const handleModeChange = (val: string) => {
+    setMode(val as "hilog" | "tlogcat");
   };
 
   const toggleBtn = (active: boolean) =>
@@ -369,6 +406,29 @@ export function HilogPanel() {
 
       {/* Toolbar */}
       <div style={{ marginBottom: 8, flexShrink: 0, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <Segmented
+          style={{ background: "var(--card-bg)" }}
+          options={[
+            {
+              label: (
+                <span>
+                  HiLog{selectedDevice && runningMap[`${selectedDevice}:hilog`] && <span style={{ marginLeft: 4, width: 6, height: 6, borderRadius: "50%", background: "#52c41a", display: "inline-block", verticalAlign: "middle" }} />}
+                </span>
+              ),
+              value: "hilog",
+            },
+            {
+              label: (
+                <span>
+                  tlogcat{selectedDevice && runningMap[`${selectedDevice}:tlogcat`] && <span style={{ marginLeft: 4, width: 6, height: 6, borderRadius: "50%", background: "#52c41a", display: "inline-block", verticalAlign: "middle" }} />}
+                </span>
+              ),
+              value: "tlogcat",
+            },
+          ]}
+          value={mode}
+          onChange={handleModeChange}
+        />
         <Select
           value={level}
           onChange={setLevel}
@@ -412,7 +472,7 @@ export function HilogPanel() {
               Start
             </Button>
           )}
-          <Tooltip title="Clear display and device hilog buffer (hilog -r)">
+          <Tooltip title={mode === "hilog" ? "Clear display and device hilog buffer (hilog -r)" : "Clear display"}>
             <Button icon={<ClearOutlined />} onClick={handleClear} />
           </Tooltip>
           <Tooltip title="Export filtered logs">

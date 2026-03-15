@@ -219,6 +219,151 @@ pub async fn clear(connect_key: &str) -> Result<(), String> {
     }
 }
 
+/// Start tlogcat streaming for an OHOS device, emitting `hdc_tlogcat_lines` events.
+/// tlogcat on OHOS is accessed via `hdc -t <key> shell tlogcat`.
+pub async fn start_tlogcat(
+    connect_key: &str,
+    app: AppHandle,
+) -> Result<(), String> {
+    let key = format!("tlogcat:{}", connect_key);
+
+    {
+        let procs = HILOG_PROCESSES.lock().map_err(|e| e.to_string())?;
+        if procs.contains_key(&key) {
+            return Err("tlogcat already running for this device".to_string());
+        }
+    }
+
+    let mut child = cmd(hdc_path())
+        .args(["-t", connect_key, "shell", "tlogcat"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to start tlogcat: {}", e))?;
+
+    let pid = child.id().ok_or("Failed to get tlogcat PID")?;
+
+    {
+        let mut procs = HILOG_PROCESSES.lock().map_err(|e| e.to_string())?;
+        procs.insert(key.clone(), pid);
+    }
+
+    let connect_key_owned = connect_key.to_string();
+
+    // Spawn a task to read stderr and emit as error-level log entries
+    if let Some(stderr) = child.stderr.take() {
+        let stderr_key = connect_key_owned.clone();
+        let stderr_app = app.clone();
+        tokio::spawn(async move {
+            let reader = BufReader::new(stderr);
+            let mut lines = reader.lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                let entry = HilogEntry {
+                    timestamp: String::new(),
+                    pid: String::new(),
+                    tid: String::new(),
+                    level: "E".to_string(),
+                    tag: "tlogcat-stderr".to_string(),
+                    message: trimmed.to_string(),
+                };
+                let _ = stderr_app.emit("hdc_tlogcat_lines", HilogBatch {
+                    connect_key: stderr_key.clone(),
+                    entries: vec![entry],
+                });
+            }
+        });
+    }
+
+    tokio::spawn(async move {
+        if let Some(stdout) = child.stdout.take() {
+            let reader = BufReader::new(stdout);
+            let mut lines = reader.lines();
+            let mut batch: Vec<HilogEntry> = Vec::with_capacity(64);
+            let mut last_flush = Instant::now();
+            let flush_interval = Duration::from_millis(50);
+
+            loop {
+                let maybe_line = tokio::time::timeout(flush_interval, lines.next_line()).await;
+
+                match maybe_line {
+                    Ok(Ok(Some(line))) => {
+                        if let Some(entry) = parse_hilog_line(&line) {
+                            batch.push(entry);
+                        }
+                        if batch.len() >= 64 || last_flush.elapsed() >= flush_interval {
+                            if !batch.is_empty() {
+                                let _ = app.emit("hdc_tlogcat_lines", HilogBatch {
+                                    connect_key: connect_key_owned.clone(),
+                                    entries: batch.clone(),
+                                });
+                                batch.clear();
+                            }
+                            last_flush = Instant::now();
+                        }
+                    }
+                    Ok(Ok(None)) => {
+                        if !batch.is_empty() {
+                            let _ = app.emit("hdc_tlogcat_lines", HilogBatch {
+                                connect_key: connect_key_owned.clone(),
+                                entries: batch.clone(),
+                            });
+                        }
+                        break;
+                    }
+                    Ok(Err(_)) => {
+                        if !batch.is_empty() {
+                            let _ = app.emit("hdc_tlogcat_lines", HilogBatch {
+                                connect_key: connect_key_owned.clone(),
+                                entries: batch.clone(),
+                            });
+                        }
+                        break;
+                    }
+                    Err(_) => {
+                        // Timeout — flush partial batch
+                        if !batch.is_empty() {
+                            let _ = app.emit("hdc_tlogcat_lines", HilogBatch {
+                                connect_key: connect_key_owned.clone(),
+                                entries: batch.clone(),
+                            });
+                            batch.clear();
+                            last_flush = Instant::now();
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut procs = HILOG_PROCESSES.lock().unwrap();
+        procs.remove(&format!("tlogcat:{}", connect_key_owned));
+    });
+
+    Ok(())
+}
+
+/// Stop tlogcat for an OHOS device.
+pub async fn stop_tlogcat(connect_key: &str) -> Result<(), String> {
+    let key = format!("tlogcat:{}", connect_key);
+    let pid = {
+        let mut procs = HILOG_PROCESSES.lock().map_err(|e| e.to_string())?;
+        procs.remove(&key)
+    };
+
+    if let Some(pid) = pid {
+        let _ = cmd("taskkill")
+            .args(["/F", "/T", "/PID", &pid.to_string()])
+            .output()
+            .await;
+        Ok(())
+    } else {
+        Err("No tlogcat running for this device".to_string())
+    }
+}
+
 /// Export hilog entries to a text file.
 pub async fn export(entries: Vec<HilogEntry>, path: String) -> Result<(), String> {
     let content: String = entries

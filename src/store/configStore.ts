@@ -2,6 +2,11 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { ThemeId } from "../theme";
 
+export interface QuickAccessPath {
+  label: string;
+  path: string;
+}
+
 interface Config {
   adbPath: string;
   theme: ThemeId;
@@ -19,6 +24,9 @@ interface Config {
   // Background image
   bgImagePath: string | null;
   bgOpacity: number;
+  // Quick access paths for file managers
+  adbQuickPaths: QuickAccessPath[];
+  ohosQuickPaths: QuickAccessPath[];
 }
 
 interface ConfigState {
@@ -44,6 +52,15 @@ export const useConfigStore = create<ConfigState>()(
         baudRate: 115200,
         bgImagePath: null,
         bgOpacity: 0.5,
+        adbQuickPaths: [
+          { label: "sdcard", path: "/sdcard" },
+          { label: "system", path: "/system" },
+          { label: "data", path: "/data" },
+        ],
+        ohosQuickPaths: [
+          { label: "data", path: "/data" },
+          { label: "system", path: "/system" },
+        ],
       },
       setConfig: (partial) => set((state) => ({ config: { ...state.config, ...partial } })),
     }),

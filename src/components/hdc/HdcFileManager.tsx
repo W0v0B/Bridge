@@ -18,11 +18,14 @@ import {
   DeleteOutlined,
   ReloadOutlined,
   SearchOutlined,
+  PlusOutlined,
+  CloseOutlined,
 } from "@ant-design/icons";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import { HdcCatModal } from "./HdcCatModal";
 import { useDeviceStore } from "../../store/deviceStore";
+import { useConfigStore } from "../../store/configStore";
 import {
   listHdcFiles,
   sendHdcFiles,
@@ -31,6 +34,7 @@ import {
 } from "../../utils/hdc";
 import { UploadModal } from "../shared/UploadModal";
 import type { FileEntry } from "../../types/adb";
+import type { SorterResult } from "antd/es/table/interface";
 
 const { Text, Link } = Typography;
 
@@ -39,6 +43,10 @@ function humanSize(bytes: number): string {
   const units = ["B", "KB", "MB", "GB", "TB"];
   const i = Math.floor(Math.log(bytes) / Math.log(1024));
   return (bytes / Math.pow(1024, i)).toFixed(i > 0 ? 1 : 0) + " " + units[i];
+}
+
+function naturalCompare(a: string, b: string): number {
+  return a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
 }
 
 export function HdcFileManager() {
@@ -50,6 +58,9 @@ export function HdcFileManager() {
   const isRemounted = deviceObj?.isRemounted ?? false;
   const remountInfo = deviceObj?.remountInfo ?? "";
 
+  const quickPaths = useConfigStore((s) => s.config.ohosQuickPaths);
+  const setConfig = useConfigStore((s) => s.setConfig);
+
   // Per-device path map
   const pathMap = useRef<Record<string, string>>({});
   const prevDeviceRef = useRef<string | null>(null);
@@ -59,6 +70,10 @@ export function HdcFileManager() {
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
+
+  // Sort state
+  const [sortField, setSortField] = useState<"name" | "modified">("name");
+  const [sortOrder, setSortOrder] = useState<"ascend" | "descend">("ascend");
 
   // Multi-selection state
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
@@ -71,6 +86,11 @@ export function HdcFileManager() {
   // Drag-drop overlay
   const [dragOver, setDragOver] = useState(false);
   const dragCountRef = useRef(0);
+
+  // Quick access add mode
+  const [addingQuickPath, setAddingQuickPath] = useState(false);
+  const [newQuickLabel, setNewQuickLabel] = useState("");
+  const [newQuickPath, setNewQuickPath] = useState("");
 
   // Refs for stable access inside drag-drop listeners
   const currentPathRef = useRef(currentPath);
@@ -288,9 +308,44 @@ export function HdcFileManager() {
     }
   };
 
-  const filteredFiles = searchQuery
+  // --- Sort and filter ---
+  const sortedFiles = [...(searchQuery
     ? files.filter((f) => f.name.toLowerCase().includes(searchQuery.toLowerCase()))
-    : files;
+    : files
+  )].sort((a, b) => {
+    // Directories always first
+    if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
+    let cmp = 0;
+    if (sortField === "name") {
+      cmp = naturalCompare(a.name, b.name);
+    } else {
+      cmp = a.modified.localeCompare(b.modified);
+    }
+    return sortOrder === "descend" ? -cmp : cmp;
+  });
+
+  const handleTableChange = (_: unknown, __: unknown, sorter: SorterResult<FileEntry> | SorterResult<FileEntry>[]) => {
+    const s = Array.isArray(sorter) ? sorter[0] : sorter;
+    if (s.columnKey === "name" || s.columnKey === "modified") {
+      setSortField(s.columnKey as "name" | "modified");
+      setSortOrder(s.order ?? "ascend");
+    }
+  };
+
+  // --- Quick access ---
+  const handleAddQuickPath = () => {
+    const label = newQuickLabel.trim();
+    const path = newQuickPath.trim();
+    if (!label || !path) return;
+    setConfig({ ohosQuickPaths: [...quickPaths, { label, path }] });
+    setNewQuickLabel("");
+    setNewQuickPath("");
+    setAddingQuickPath(false);
+  };
+
+  const handleRemoveQuickPath = (idx: number) => {
+    setConfig({ ohosQuickPaths: quickPaths.filter((_, i) => i !== idx) });
+  };
 
   // Breadcrumb
   const pathSegments = currentPath.split("/").filter(Boolean);
@@ -309,6 +364,8 @@ export function HdcFileManager() {
       title: "Name",
       dataIndex: "name",
       key: "name",
+      sorter: true,
+      sortOrder: sortField === "name" ? sortOrder : undefined,
       render: (name: string, record: FileEntry) => (
         <Space>
           {record.is_dir ? (
@@ -339,6 +396,8 @@ export function HdcFileManager() {
       dataIndex: "modified",
       key: "modified",
       width: 160,
+      sorter: true,
+      sortOrder: sortField === "modified" ? sortOrder : undefined,
     },
   ];
 
@@ -372,6 +431,52 @@ export function HdcFileManager() {
         padding: "0 12px 12px",
       }}
     >
+      {/* Quick access bar */}
+      <div style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 4, marginBottom: 6, flexWrap: "wrap" }}>
+        {quickPaths.map((qp, idx) => (
+          <Tag
+            key={idx}
+            color={currentPath === qp.path ? "blue" : undefined}
+            style={{ cursor: "pointer", margin: 0 }}
+            onClick={() => navigateTo(qp.path)}
+            closable
+            onClose={(e) => { e.stopPropagation(); handleRemoveQuickPath(idx); }}
+          >
+            {qp.label}
+          </Tag>
+        ))}
+        {addingQuickPath ? (
+          <Space size={4}>
+            <Input
+              size="small"
+              placeholder="Label"
+              value={newQuickLabel}
+              onChange={(e) => setNewQuickLabel(e.target.value)}
+              style={{ width: 70 }}
+            />
+            <Input
+              size="small"
+              placeholder="Path"
+              value={newQuickPath}
+              onChange={(e) => setNewQuickPath(e.target.value)}
+              onPressEnter={handleAddQuickPath}
+              style={{ width: 120 }}
+            />
+            <Button size="small" type="primary" onClick={handleAddQuickPath} icon={<PlusOutlined />} />
+            <Button size="small" onClick={() => setAddingQuickPath(false)} icon={<CloseOutlined />} />
+          </Space>
+        ) : (
+          <Tooltip title="Add quick access path">
+            <Tag
+              style={{ cursor: "pointer", borderStyle: "dashed", margin: 0 }}
+              onClick={() => { setNewQuickPath(currentPath); setAddingQuickPath(true); }}
+            >
+              <PlusOutlined />
+            </Tag>
+          </Tooltip>
+        )}
+      </div>
+
       {/* Breadcrumb path */}
       <div style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 4, marginBottom: 8 }}>
         {pathLinks}
@@ -469,12 +574,14 @@ export function HdcFileManager() {
         )}
 
         <Table
-          dataSource={filteredFiles}
+          dataSource={sortedFiles}
           columns={columns}
           rowKey="path"
           size="small"
           loading={loading}
           pagination={false}
+          showSorterTooltip={false}
+          onChange={handleTableChange}
           onRow={(record) => ({
             onClick: () => handleRowClick(record),
             style: {
