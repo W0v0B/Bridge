@@ -438,6 +438,32 @@ pub async fn stop_tlogcat(connect_key: &str) -> Result<(), String> {
     }
 }
 
+/// Kill any running hilog and tlogcat streams for the given device (best-effort).
+pub async fn kill_streams_for_device(connect_key: &str) {
+    let hilog_key = format!("hilog:{}", connect_key);
+    let tlogcat_key = format!("tlogcat:{}", connect_key);
+    let pids: Vec<u32> = {
+        let mut procs = match HILOG_PROCESSES.lock() {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+        let mut found = Vec::new();
+        if let Some(pid) = procs.remove(&hilog_key) {
+            found.push(pid);
+        }
+        if let Some(pid) = procs.remove(&tlogcat_key) {
+            found.push(pid);
+        }
+        found
+    };
+    for pid in pids {
+        let _ = cmd("taskkill")
+            .args(["/F", "/T", "/PID", &pid.to_string()])
+            .output()
+            .await;
+    }
+}
+
 /// Export hilog entries to a text file.
 pub async fn export(entries: Vec<HilogEntry>, path: String) -> Result<(), String> {
     let content: String = entries

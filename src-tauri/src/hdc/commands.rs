@@ -226,3 +226,18 @@ pub async fn stop_shell_stream(connect_key: &str) -> Result<(), String> {
         Err("No hdc shell stream running for this device".to_string())
     }
 }
+
+/// Kill any running shell stream for the given device (best-effort, no error on missing).
+pub async fn kill_shell_stream(connect_key: &str) {
+    let key = format!("hdc_shell:{}", connect_key);
+    let pid = {
+        let mut procs = HDC_SHELL_PROCESSES.lock().ok();
+        procs.as_mut().and_then(|p| p.remove(&key))
+    };
+    if let Some(pid) = pid {
+        let _ = cmd("taskkill")
+            .args(["/F", "/T", "/PID", &pid.to_string()])
+            .output()
+            .await;
+    }
+}

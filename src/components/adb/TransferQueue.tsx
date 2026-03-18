@@ -54,8 +54,8 @@ export function TransferQueue() {
     <div
       style={{
         padding: "8px 16px",
-        background: "#fff",
-        borderTop: "1px solid #f0f0f0",
+        background: "var(--content-bg)",
+        borderTop: "1px solid var(--border)",
       }}
     >
       <List
@@ -73,6 +73,7 @@ export function TransferQueue() {
               size="small"
               style={{ width: 200 }}
               status={item.percent < 0 ? "exception" : item.percent >= 100 ? "success" : "active"}
+              trailColor="var(--card-bg)"
             />
           </List.Item>
         )}

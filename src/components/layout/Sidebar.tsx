@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Button, Tooltip, Typography } from "antd";
 import {
   PlusOutlined,
@@ -7,6 +8,7 @@ import {
   ApiOutlined,
   MobileOutlined,
   DisconnectOutlined,
+  LoadingOutlined,
   LeftOutlined,
   RightOutlined,
 } from "@ant-design/icons";
@@ -40,12 +42,14 @@ export function Sidebar({ onConnect, onRefresh, onSettings, collapsed, onCollaps
   const selectDevice = useDeviceStore((s) => s.selectDevice);
   const removeDevice = useDeviceStore((s) => s.removeDevice);
   const syncAdbDevices = useDeviceStore((s) => s.syncAdbDevices);
+  const [disconnecting, setDisconnecting] = useState<Set<string>>(new Set());
 
   const adbDevices = devices.filter((d) => d.type === "adb");
   const serialDevices = devices.filter((d) => d.type === "serial");
   const ohosDevices = devices.filter((d) => d.type === "ohos");
 
   const handleDisconnect = async (device: ConnectedDevice) => {
+    setDisconnecting((prev) => new Set(prev).add(device.id));
     try {
       if (device.type === "adb") {
         await disconnectDevice(device.serial);
@@ -60,6 +64,12 @@ export function Sidebar({ onConnect, onRefresh, onSettings, collapsed, onCollaps
       }
     } catch {
       // ignore
+    } finally {
+      setDisconnecting((prev) => {
+        const next = new Set(prev);
+        next.delete(device.id);
+        return next;
+      });
     }
   };
 
@@ -135,15 +145,19 @@ export function Sidebar({ onConnect, onRefresh, onSettings, collapsed, onCollaps
           {device.name}
         </Text>
         {canDisconnect ? (
-          <Tooltip title="Disconnect">
-            <DisconnectOutlined
-              style={{ fontSize: 12, color: "var(--text-secondary)" }}
-              onClick={(e) => {
-                e.stopPropagation();
-                handleDisconnect(device);
-              }}
-            />
-          </Tooltip>
+          disconnecting.has(device.id) ? (
+            <LoadingOutlined style={{ fontSize: 12, color: "var(--text-secondary)" }} spin />
+          ) : (
+            <Tooltip title="Disconnect">
+              <DisconnectOutlined
+                style={{ fontSize: 12, color: "var(--text-secondary)" }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleDisconnect(device);
+                }}
+              />
+            </Tooltip>
+          )
         ) : null}
       </div>
     );

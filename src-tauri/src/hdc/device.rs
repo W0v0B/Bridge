@@ -122,7 +122,14 @@ pub async fn connect_device(addr: &str) -> Result<String, String> {
 }
 
 /// Disconnect an OHOS device: `hdc tconn <addr> -remove`.
+/// Stops all running streams first to avoid the disconnect hanging.
 pub async fn disconnect_device(addr: &str) -> Result<String, String> {
+    // Kill running streams before disconnecting so hdc doesn't hang
+    tokio::join!(
+        super::hilog::kill_streams_for_device(addr),
+        super::commands::kill_shell_stream(addr),
+    );
+
     let result = run_hdc(&["tconn", addr, "-remove"]).await;
 
     // Clean up cached remount status for this device
@@ -209,7 +216,28 @@ pub fn start_device_watcher(app: AppHandle) {
 
         loop {
             if let Ok(devices) = list_devices().await {
-                // Attempt remount for any newly connected device (once per session)
+                // Build set of currently connected device keys
+                let connected_keys: HashSet<String> = devices
+                    .iter()
+                    .filter(|d| d.state.eq_ignore_ascii_case("connected"))
+                    .map(|d| d.connect_key.clone())
+                    .collect();
+
+                // Clear remount tracking for devices that are no longer connected,
+                // so they get re-remounted when they reconnect (e.g. after reboot).
+                // Also clear their cached remount status.
+                attempted_remounts.retain(|key| {
+                    if connected_keys.contains(key) {
+                        true
+                    } else {
+                        if let Ok(mut map) = DEVICE_REMOUNT_STATUS.lock() {
+                            map.remove(key);
+                        }
+                        false
+                    }
+                });
+
+                // Attempt remount for any newly connected device
                 for device in &devices {
                     if device.state.eq_ignore_ascii_case("connected")
                         && !attempted_remounts.contains(&device.connect_key)
