@@ -335,8 +335,8 @@ export function ShellPanel() {
 
   return (
     <div style={{ position: "absolute", inset: 0 }}>
-    <PanelGroup direction="horizontal" style={{ height: "100%" }}>
-      <Panel defaultSize={70} minSize={40}>
+    <PanelGroup direction="horizontal" style={{ height: "100%" }} id="shell-panel-group">
+      <Panel id="shell-main" order={1} defaultSize={quickCmdCollapsed ? 100 : 70} minSize={40}>
         <div
           style={{
             display: "flex",
@@ -487,7 +487,7 @@ export function ShellPanel() {
                 </span>
               }
             />
-            {running && (
+            {running && selectedDevice.type !== "serial" && (
               <Button
                 size="small"
                 danger
@@ -497,6 +497,24 @@ export function ShellPanel() {
               >
                 Stop
               </Button>
+            )}
+            {selectedDevice.type === "serial" && (
+              <Tooltip title="Send Ctrl+C (interrupt)">
+                <Button
+                  size="small"
+                  danger
+                  onClick={async () => {
+                    try {
+                      await writeToPort(selectedDevice.serial, "\x03");
+                    } catch (e) {
+                      appendOutput(`Error sending Ctrl+C: ${e}\n`);
+                    }
+                  }}
+                  style={{ fontFamily: "monospace", fontWeight: 600 }}
+                >
+                  Ctrl+C
+                </Button>
+              </Tooltip>
             )}
             <Tooltip title={quickCmdCollapsed ? "Show Quick Commands" : "Hide Quick Commands"}>
               <Button
@@ -521,7 +539,7 @@ export function ShellPanel() {
             }}
           />
 
-          <Panel defaultSize={30} minSize={20}>
+          <Panel id="shell-quick-cmds" order={2} defaultSize={30} minSize={20}>
             <QuickCommandsPanel
               onOutput={appendOutput}
               onStreamStart={(deviceId) => {
