@@ -1,8 +1,8 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useDeviceStore } from "../store/deviceStore";
 import { getDevices } from "../utils/adb";
-import type { AdbDevice, TransferProgress, LogcatBatch } from "../types/adb";
+import type { AdbDevice, TransferProgress, LogcatBatch, ScrcpyState } from "../types/adb";
 
 export function useDeviceEvents() {
   const syncAdbDevices = useDeviceStore((s) => s.syncAdbDevices);
@@ -69,4 +69,35 @@ export function useTlogcatEvents(onBatch: (batch: LogcatBatch) => void) {
       unlisten.then((fn) => fn());
     };
   }, []);
+}
+
+/**
+ * Track scrcpy running state per device serial.
+ * Returns { running, setRunningOptimistic } for a given serial.
+ */
+export function useScrcpyState(serial: string | null) {
+  const [runningMap, setRunningMap] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    const unlisten = listen<ScrcpyState>("scrcpy_state", (event) => {
+      const { serial: s, running } = event.payload;
+      setRunningMap((prev) => ({ ...prev, [s]: running }));
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
+
+  const running = serial ? runningMap[serial] ?? false : false;
+
+  const setRunningOptimistic = useCallback(
+    (value: boolean) => {
+      if (serial) {
+        setRunningMap((prev) => ({ ...prev, [serial]: value }));
+      }
+    },
+    [serial]
+  );
+
+  return { running, setRunningOptimistic };
 }

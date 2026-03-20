@@ -7,7 +7,7 @@ pub mod util;
 use base64::Engine as _;
 use tauri::Manager as _;
 
-use adb::{apps, commands, device, file, logcat};
+use adb::{apps, commands, device, file, logcat, scrcpy};
 use hdc::{apps as hdc_apps, commands as hdc_commands, device as hdc_device, file as hdc_file, hilog};
 use serial::manager;
 use util as script_util;
@@ -45,6 +45,10 @@ pub fn run() {
             force_stop_package,
             clear_package_data,
             re_enable_package,
+            // ADB scrcpy commands
+            start_scrcpy,
+            stop_scrcpy,
+            is_scrcpy_running,
             // ADB logcat commands
             start_logcat,
             stop_logcat,
@@ -204,6 +208,23 @@ async fn clear_package_data(serial: String, package: String) -> Result<String, S
 #[tauri::command]
 async fn re_enable_package(serial: String, package: String) -> Result<String, String> {
     apps::re_enable_package(&serial, &package).await
+}
+
+// ── ADB Scrcpy Commands ──
+
+#[tauri::command]
+async fn start_scrcpy(serial: String, config: scrcpy::ScrcpyConfig, app: tauri::AppHandle) -> Result<(), String> {
+    scrcpy::start(&serial, config, app).await
+}
+
+#[tauri::command]
+async fn stop_scrcpy(serial: String, app: tauri::AppHandle) -> Result<(), String> {
+    scrcpy::stop(&serial, &app).await
+}
+
+#[tauri::command]
+fn is_scrcpy_running(serial: String) -> bool {
+    scrcpy::is_running(&serial)
 }
 
 // ── ADB Logcat Commands ──

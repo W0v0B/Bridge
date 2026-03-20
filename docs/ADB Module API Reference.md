@@ -17,9 +17,11 @@ This document is the complete API reference for the ADB module. It covers every 
 5. [Commands — Shell](#5-commands--shell)
 6. [Commands — Logcat](#6-commands--logcat)
 7. [Commands — App Manager](#7-commands--app-manager)
-8. [Events (Backend → Frontend)](#8-events-backend--frontend)
-9. [Frontend Utility Wrappers](#9-frontend-utility-wrappers)
-10. [Error Handling](#10-error-handling)
+8. [Commands — Screen Mirror (scrcpy)](#8-commands--screen-mirror-scrcpy)
+9. [Events (Backend → Frontend)](#9-events-backend--frontend)
+10. [Commands — Local Script Execution](#10-commands--local-script-execution)
+11. [Frontend Utility Wrappers](#11-frontend-utility-wrappers)
+12. [Error Handling](#12-error-handling)
 
 ---
 
@@ -35,6 +37,67 @@ All commands are `async` on the Rust side (tokio) and return `Result<T, String>`
 ---
 
 ## 2. Data Types
+
+### `ScrcpyConfig`
+
+Configuration object passed to `start_scrcpy`. All fields are optional — omitted fields use scrcpy defaults.
+
+```typescript
+interface ScrcpyConfig {
+  maxSize?: number;        // --max-size (e.g. 1024)
+  videoBitrate?: string;   // --video-bit-rate (e.g. "8M")
+  maxFps?: number;         // --max-fps (e.g. 60)
+  stayAwake?: boolean;     // --stay-awake
+  showTouches?: boolean;   // --show-touches
+  borderless?: boolean;    // --window-borderless
+  alwaysOnTop?: boolean;   // --always-on-top
+  turnScreenOff?: boolean; // --turn-screen-off
+  powerOffOnClose?: boolean; // --power-off-on-close
+  crop?: string;           // --crop (e.g. "1224:1440:0:0")
+  lockOrientation?: number; // --lock-video-orientation (0-3)
+  recordPath?: string;     // --record <path>
+  noAudio?: boolean;       // --no-audio
+  keyboardMode?: string;   // --keyboard (uhid/sdk/aoa/disabled)
+  mouseMode?: string;      // --mouse (uhid/sdk/aoa/disabled)
+}
+```
+
+```rust
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScrcpyConfig {
+    pub max_size: Option<u16>,
+    pub video_bitrate: Option<String>,
+    pub max_fps: Option<u8>,
+    pub stay_awake: Option<bool>,
+    pub show_touches: Option<bool>,
+    pub borderless: Option<bool>,
+    pub always_on_top: Option<bool>,
+    pub turn_screen_off: Option<bool>,
+    pub power_off_on_close: Option<bool>,
+    pub crop: Option<String>,
+    pub lock_orientation: Option<u8>,
+    pub record_path: Option<String>,
+    pub no_audio: Option<bool>,
+    pub keyboard_mode: Option<String>,
+    pub mouse_mode: Option<String>,
+}
+```
+
+---
+
+### `ScrcpyState`
+
+Payload of the `scrcpy_state` event.
+
+```typescript
+interface ScrcpyState {
+  serial: string;  // Device serial
+  running: boolean; // true = scrcpy is running, false = stopped/exited
+}
+```
+
+---
 
 ### `AdbDevice`
 
@@ -749,7 +812,87 @@ invoke("re_enable_package", { serial: string, package: string }): Promise<string
 
 ---
 
-## 8. Events (Backend → Frontend)
+## 8. Commands — Screen Mirror (scrcpy)
+
+**Source**: `src-tauri/src/adb/scrcpy.rs`
+
+---
+
+### `start_scrcpy`
+
+Starts scrcpy screen mirroring for a device.
+
+```typescript
+invoke("start_scrcpy", { serial: string, config: ScrcpyConfig }): Promise<void>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `serial` | `string` | Device serial |
+| `config` | `ScrcpyConfig` | scrcpy launch options (all fields optional) |
+
+**Returns**: `void` immediately (scrcpy runs as an independent window).
+
+**Side effects**:
+- If scrcpy is already running for this serial, it is killed first (auto-stop previous).
+- Emits [`scrcpy_state`](#scrcpy_state) `{ serial, running: true }` on successful launch.
+- Spawns a background task that monitors scrcpy exit and emits `{ serial, running: false }` on termination.
+
+**Implementation**:
+- Resolves scrcpy binary via `scrcpy_path()`: bundled `resources/scrcpy/scrcpy.exe` → Scoop/Chocolatey install paths → bare `"scrcpy"` on PATH.
+- Spawns `scrcpy -s {serial} --window-title "DevBridge - {serial}"` plus all enabled config flags.
+- PID stored in `SCRCPY_PROCESSES: Lazy<Mutex<HashMap<String, u32>>>`.
+- Uses `CREATE_NO_WINDOW` flag via the `cmd()` helper to avoid console flash on Windows.
+
+**Errors**: Rejects with `"scrcpy not found. Install from https://github.com/Genymobile/scrcpy and ensure it is on PATH, then restart DevBridge."` if scrcpy cannot be found, or `"Failed to start scrcpy: ..."` for other spawn failures.
+
+---
+
+### `stop_scrcpy`
+
+Stops the scrcpy instance for a device.
+
+```typescript
+invoke("stop_scrcpy", { serial: string }): Promise<void>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `serial` | `string` | Device serial |
+
+**Returns**: `void`. Does not error if scrcpy is not running for this serial.
+
+**Implementation**: Removes PID from `SCRCPY_PROCESSES` and kills the process tree via `taskkill /F /T /PID`.
+
+**Side effects**: Emits [`scrcpy_state`](#scrcpy_state) `{ serial, running: false }`.
+
+---
+
+### `is_scrcpy_running`
+
+Checks whether scrcpy is currently running for a device.
+
+```typescript
+invoke("is_scrcpy_running", { serial: string }): Promise<boolean>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `serial` | `string` | Device serial |
+
+**Returns**: `true` if a scrcpy PID is registered for this serial, `false` otherwise.
+
+**Notes**: This is a synchronous (non-async) Tauri command. It only checks the in-memory PID registry — it does not verify the process is still alive.
+
+---
+
+#### Auto-cleanup on device disconnect
+
+The device watcher (`device.rs::start_device_watcher`) compares the current device list with the previous poll result. When a device serial disappears, it spawns `scrcpy::stop(serial)` to kill the scrcpy window. This handles unexpected disconnects (cable pull, reboot) in addition to UI-initiated disconnects.
+
+---
+
+## 9. Events (Backend → Frontend)
 
 Events are emitted by the Rust backend via `app.emit()` and subscribed to in the frontend via `listen()`.
 
@@ -842,7 +985,24 @@ listen("transfer_progress", (event: { payload: TransferProgress }) => { ... })
 
 ---
 
-## 9. Commands — Local Script Execution
+### `scrcpy_state`
+
+Emitted when a scrcpy instance starts or stops for a device.
+
+```typescript
+listen("scrcpy_state", (event: { payload: ScrcpyState }) => { ... })
+```
+
+**Payload**: `ScrcpyState { serial, running }`
+
+**Trigger conditions**:
+- `start_scrcpy` successfully launches scrcpy → `running: true`
+- scrcpy process exits (user closes window, device disconnects, or `stop_scrcpy` called) → `running: false`
+- Device disappears from the device watcher poll → `stop_scrcpy` is called automatically → `running: false`
+
+---
+
+## 10. Commands — Local Script Execution
 
 These commands are not ADB-specific — they execute scripts on the host machine. Used by the Quick Commands panel when a command has a `scriptPath` set.
 
@@ -888,7 +1048,7 @@ await stopLocalScript(deviceId);
 
 ---
 
-## 10. Frontend Utility Wrappers
+## 11. Frontend Utility Wrappers
 
 All wrappers are in `src/utils/adb.ts` and are thin `invoke()` calls with TypeScript types.
 
@@ -916,6 +1076,9 @@ import {
   forceStopPackage,
   clearPackageData,
   reEnablePackage,
+  startScrcpy,
+  stopScrcpy,
+  isScrcpyRunning,
 } from "../utils/adb";
 ```
 
@@ -943,6 +1106,9 @@ import {
 | `forceStopPackage(serial, pkg)` | `force_stop_package` |
 | `clearPackageData(serial, pkg)` | `clear_package_data` |
 | `reEnablePackage(serial, pkg)` | `re_enable_package` |
+| `startScrcpy(serial, config)` | `start_scrcpy` |
+| `stopScrcpy(serial)` | `stop_scrcpy` |
+| `isScrcpyRunning(serial)` | `is_scrcpy_running` |
 
 **Script wrappers** (in `src/utils/script.ts`):
 
@@ -953,7 +1119,7 @@ import {
 
 ---
 
-## 11. Error Handling
+## 12. Error Handling
 
 All Tauri commands return `Result<T, String>` on the Rust side, which maps to a rejected Promise on the frontend. The rejection value is always a plain string with a human-readable message.
 

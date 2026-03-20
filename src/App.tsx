@@ -9,6 +9,7 @@ import { WelcomePage } from "./components/layout/WelcomePage";
 import { FileManager } from "./components/adb/FileManager";
 import { AppManager } from "./components/adb/AppManager";
 import { LogcatPanel } from "./components/adb/LogcatPanel";
+import { ScreenMirrorPanel } from "./components/adb/ScreenMirrorPanel";
 import { TransferQueue } from "./components/adb/TransferQueue";
 import { ShellPanel } from "./components/shell/ShellPanel";
 import { HilogPanel } from "./components/hdc/HilogPanel";
@@ -51,6 +52,7 @@ function BgLayer({ dataUrl }: { dataUrl: string }) {
 const adbTabs = [
   { key: "shell", label: "Shell", children: <ShellPanel /> },
   { key: "logcat", label: "Logcat", children: <LogcatPanel /> },
+  { key: "screen", label: "Screen Mirror", children: <ScreenMirrorPanel /> },
   { key: "files", label: "File Manager", children: <FileManager /> },
   { key: "apps", label: "Apps", children: <AppManager /> },
 ];

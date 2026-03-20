@@ -48,6 +48,29 @@ export interface LogcatBatch {
   entries: LogEntry[];
 }
 
+export interface ScrcpyConfig {
+  maxSize?: number;
+  videoBitrate?: string;
+  maxFps?: number;
+  stayAwake?: boolean;
+  showTouches?: boolean;
+  borderless?: boolean;
+  alwaysOnTop?: boolean;
+  turnScreenOff?: boolean;
+  powerOffOnClose?: boolean;
+  crop?: string;
+  lockOrientation?: number;
+  recordPath?: string;
+  noAudio?: boolean;
+  keyboardMode?: string;
+  mouseMode?: string;
+}
+
+export interface ScrcpyState {
+  serial: string;
+  running: boolean;
+}
+
 export interface PackageInfo {
   package_name: string;
   apk_path: string;

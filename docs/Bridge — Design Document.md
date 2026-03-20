@@ -57,6 +57,7 @@ Build a Windows desktop debugging tool that unifies ADB device management, OpenH
 | Batch Transfer | Multi-file / folder drag-and-drop transfer with real-time progress bar | P0 |
 | Log Collection | Real-time logcat output with Tag/Level filtering and export support | P0 |
 | App Manager | Visual list of installed apps (user + system); install APK, uninstall/disable per app | P1 |
+| Screen Mirror | Mirror and control device screen via scrcpy subprocess; per-device independent windows; configurable display/input/recording options | P1 |
 | ADB Commands | Built-in shortcuts for common ADB operations (screenshot, reboot, etc.) | P1 |
 | Network ADB | Connect to a device over the network by entering an IP:Port | P1 |
 
@@ -153,6 +154,7 @@ tokio Runtime
 ├── Task: logcat_reader          # Streams adb logcat stdout; emits LogcatBatch { serial, entries }
 ├── Task: shell_stream_reader    # Streams adb shell stdout+stderr; emits shell_output/shell_exit
 ├── Task: file_transfer          # Streams push/pull progress; emits transfer_progress
+├── Task: scrcpy_monitor         # Awaits scrcpy child exit; emits scrcpy_state { serial, running: false }
 │
 ├── Task: hdc_device_watcher     # Polls `hdc list targets` + `-v` every 2s; cross-references to filter phantoms
 ├── Task: hdc_remount            # Runs `hdc target mount` once per device per session
@@ -404,6 +406,55 @@ interface PackageInfo {
   - System + no root → "Disable" / "Disable {pkg} for current user? (no root — soft disable)"
 - **Loading feedback**: `message.loading(…, 0)` toast appears for both install and uninstall operations; transitions to success/error on completion. The Install APK button also shows an inline spinner while running.
 
+#### 4.1.6 Screen Mirror (scrcpy)
+
+Mirrors and controls the device screen by launching scrcpy as an external subprocess. Each device gets an independent scrcpy window. scrcpy is detected on PATH (not bundled) to keep the installer small.
+
+```rust
+// Process-global PID map for scrcpy instances, keyed by device serial
+static SCRCPY_PROCESSES: Lazy<Mutex<HashMap<String, u32>>>
+
+#[tauri::command]
+async fn start_scrcpy(serial: String, config: ScrcpyConfig, app: AppHandle) -> Result<(), String>
+// 1. Resolves scrcpy binary via scrcpy_path(): bundled → Scoop/Chocolatey → PATH
+// 2. Kills any existing scrcpy for this serial (auto-stop previous)
+// 3. Builds args from config: -s {serial}, --window-title, + all enabled flags
+// 4. Spawns via tokio::process::Command with CREATE_NO_WINDOW
+// 5. Stores PID in SCRCPY_PROCESSES; emits("scrcpy_state", { serial, running: true })
+// 6. Background task awaits child.wait() → on exit, removes PID, emits running: false
+
+#[tauri::command]
+async fn stop_scrcpy(serial: String, app: AppHandle) -> Result<(), String>
+// Removes PID, kills via taskkill /F /T /PID, emits running: false
+
+#[tauri::command]
+fn is_scrcpy_running(serial: String) -> bool
+```
+
+```typescript
+interface ScrcpyConfig {
+  maxSize?: number;        // --max-size
+  videoBitrate?: string;   // --video-bit-rate (e.g. "8M")
+  maxFps?: number;         // --max-fps
+  stayAwake?: boolean;     // --stay-awake
+  showTouches?: boolean;   // --show-touches
+  borderless?: boolean;    // --window-borderless
+  alwaysOnTop?: boolean;   // --always-on-top
+  turnScreenOff?: boolean; // --turn-screen-off
+  powerOffOnClose?: boolean; // --power-off-on-close
+  crop?: string;           // --crop (e.g. "1224:1440:0:0")
+  lockOrientation?: number; // --lock-video-orientation (0-3)
+  recordPath?: string;     // --record <path>
+  noAudio?: boolean;       // --no-audio
+  keyboardMode?: string;   // --keyboard (uhid/sdk/aoa/disabled)
+  mouseMode?: string;      // --mouse (uhid/sdk/aoa/disabled)
+}
+```
+
+**Auto-cleanup**: The device watcher in `device.rs` detects when a device disappears from `adb devices` and automatically calls `scrcpy::stop()` for that serial. This handles unexpected disconnects (cable pull, reboot).
+
+**Frontend** (`ScreenMirrorPanel.tsx`): Start/Stop button, collapsible settings panel (Display, Window, Device, Input, Recording sections), config persisted to `localStorage` key `"scrcpy_config"`.
+
 ### 4.2 Serial Module
 
 #### 4.2.1 Serial Port Management
@@ -610,8 +661,9 @@ Shown when no device is selected. Vertically and horizontally centred within the
 │   │  ADB Devices    │ │  OHOS Devices    │ │ Serial / Telnet │  │
 │   │  • Shell        │ │  • Shell         │ │  • Shell        │  │
 │   │  • Logcat       │ │  • HiLog         │ │                 │  │
-│   │  • File Manager │ │  • File Manager  │ │                 │  │
-│   │  • App Manager  │ │  • App Manager   │ │                 │  │
+│   │  • Screen Mirror│ │  • File Manager  │ │                 │  │
+│   │  • File Manager │ │  • App Manager   │ │                 │  │
+│   │  • App Manager  │ │                  │ │                 │  │
 │   └─────────────────┘ └──────────────────┘ └─────────────────┘  │
 │                                                                  │
 │           Click + in the sidebar to connect a device.            │
@@ -872,6 +924,7 @@ Bridge/
 │   │   │   ├── file.rs         # File manager commands (push/pull/delete)
 │   │   │   ├── logcat.rs       # Streaming logcat reader
 │   │   │   ├── apps.rs         # App manager: list packages, install/uninstall
+│   │   │   ├── scrcpy.rs      # Screen mirror: scrcpy process management and config
 │   │   │   └── commands.rs     # Shell stream, install APK, adb_path() resolver
 │   │   ├── serial/
 │   │   │   ├── mod.rs
@@ -903,6 +956,7 @@ Bridge/
 │   │   │   ├── CatModal.tsx        # View (cat) modal: text/hex, size limit, auto-refresh
 │   │   │   ├── LogcatPanel.tsx
 │   │   │   ├── AppManager.tsx      # App Manager tab: package list, install, uninstall/disable
+│   │   │   ├── ScreenMirrorPanel.tsx  # Screen Mirror tab: scrcpy launch, settings panel
 │   │   │   └── TransferQueue.tsx
 │   │   └── shell/              # Unified shell for ADB + serial
 │   │       ├── ShellPanel.tsx          # Terminal output + input, serial data subscription

@@ -230,6 +230,21 @@ pub fn start_device_watcher(app: AppHandle) {
                     }
                 }
 
+                // Stop scrcpy for any device that disappeared
+                if !last_devices.is_empty() {
+                    let current_serials: HashSet<&str> =
+                        devices.iter().map(|d| d.serial.as_str()).collect();
+                    for prev in &last_devices {
+                        if !current_serials.contains(prev.serial.as_str()) {
+                            let serial = prev.serial.clone();
+                            let app_clone = app.clone();
+                            tokio::spawn(async move {
+                                let _ = super::scrcpy::stop(&serial, &app_clone).await;
+                            });
+                        }
+                    }
+                }
+
                 if devices != last_devices {
                     last_devices = devices.clone();
                     let _ = app.emit("devices_changed", &last_devices);

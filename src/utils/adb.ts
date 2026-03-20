@@ -5,6 +5,7 @@ import type {
   LogEntry,
   LogcatFilter,
   PackageInfo,
+  ScrcpyConfig,
 } from "../types/adb";
 
 export async function getDevices() {
@@ -111,4 +112,18 @@ export async function clearPackageData(serial: string, pkg: string) {
 
 export async function reEnablePackage(serial: string, pkg: string) {
   return invoke<string>("re_enable_package", { serial, package: pkg });
+}
+
+// ── Scrcpy Commands ──
+
+export async function startScrcpy(serial: string, config: ScrcpyConfig) {
+  return invoke<void>("start_scrcpy", { serial, config });
+}
+
+export async function stopScrcpy(serial: string) {
+  return invoke<void>("stop_scrcpy", { serial });
+}
+
+export async function isScrcpyRunning(serial: string) {
+  return invoke<boolean>("is_scrcpy_running", { serial });
 }
