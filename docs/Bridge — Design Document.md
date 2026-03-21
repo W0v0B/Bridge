@@ -86,6 +86,7 @@ Build a Windows desktop debugging tool that unifies ADB device management, OpenH
 | HiLog | Real-time HiLog streaming with level/keyword filtering and export | P0 |
 | Shell | Interactive shell via `hdc shell`; streaming output to unified Shell tab | P0 |
 | App Manager | List all HAP bundles with install path and type classification (user/product/vendor/system); install HAP, uninstall user apps, force stop, clear data | P1 |
+| Screen Mirror | In-app screen capture via `snapshot_display` + `hdc file recv`; JPEG frames streamed at configurable intervals; D-pad/key remote control via `input keyevent` | P1 |
 | Auto-Remount | Automatically runs `hdc target mount` on device connect; shows remount status in File Manager header | P1 |
 | TCP Connect | Connect to OHOS device over TCP via `hdc tconn` using Host + Port inputs | P1 |
 
@@ -162,6 +163,7 @@ tokio Runtime
 ├── Task: tlogcat_reader        # Streams tlogcat output; emits HilogBatch + hilog_exit; fallback parsing for error messages
 ├── Task: hdc_shell_stream       # Streams hdc shell output; emits hdc_shell_output/hdc_shell_exit
 ├── Task: hdc_bundle_resolver    # Parallel bm dump -n calls via JoinSet for App Manager
+├── Task: hdc_screen_mirror      # Capture loop: snapshot_display → file recv → base64 → hdc_screen_frame; exits on cancel or 5 failures
 
 std::thread (native)
 │
@@ -453,7 +455,43 @@ interface ScrcpyConfig {
 
 **Auto-cleanup**: The device watcher in `device.rs` detects when a device disappears from `adb devices` and automatically calls `scrcpy::stop()` for that serial. This handles unexpected disconnects (cable pull, reboot).
 
-**Frontend** (`ScreenMirrorPanel.tsx`): Start/Stop button, collapsible settings panel (Display, Window, Device, Input, Recording sections), config persisted to `localStorage` key `"scrcpy_config"`.
+**Frontend** (`ScreenMirrorPanel.tsx`): Start/Stop button, collapsible settings panel (Display, Window, Device, Input, Recording sections), config persisted to `localStorage` key `"scrcpy_config"`. A **Remote Control Panel** (D-pad, Home/Back/Menu, Vol+/Vol−/Power) is rendered alongside the settings; each button sends `input keyevent <code>` via `runShellCommand`. The remote panel uses the shared `RemoteControlPanel` component (`src/components/shared/RemoteControlPanel.tsx`).
+
+---
+
+#### 4.1.7 OHOS Screen Mirror
+
+Mirrors OHOS device screen in-app (no external window) using a polling capture loop.
+
+```rust
+// Process-global session map keyed by connect_key
+static SCREEN_SESSIONS: Lazy<Mutex<HashMap<String, Arc<AtomicBool>>>>
+
+// start(): stops any existing session, inserts cancellation flag, spawns capture task
+// Capture loop per iteration:
+//   1. hdc -t {ck} shell snapshot_display -f /data/local/tmp/devbridge_screen.jpeg
+//   2. hdc -t {ck} file recv <remote_path> <local_temp>
+//   3. Read local file → base64-encode → emit("hdc_screen_frame", { connect_key, data })
+//   4. Delete local temp file; sleep(intervalMs)
+// Loop exits: cancelled flag set, or 5 consecutive snapshot/recv failures
+// On exit: removes session entry, deletes temp files, emits hdc_screen_state { running: false }
+
+// stop(): removes entry + sets flag (loop exits at next iteration)
+// is_running(): synchronous map lookup
+// kill_session(): best-effort stop called by device watcher on disconnect
+```
+
+```typescript
+interface HdcScreenMirrorConfig { intervalMs: number } // 333–5000 ms, clamped in Rust
+
+// Events
+"hdc_screen_frame"  → ScreenFrame { connect_key, data }  // base64 JPEG per frame
+"hdc_screen_state"  → HdcScreenMirrorState { connect_key, running }
+```
+
+**Frontend** (`HdcScreenMirrorPanel.tsx`): Start/Stop button, FPS counter, capture interval slider (0.2–3 fps, persisted to `localStorage` key `"hdc_screen_config"`), in-app JPEG image display area. **Remote Control Panel** (shared `RemoteControlPanel` component) rendered alongside the image; keys sent via `runHdcShellCommand(connectKey, "input keyevent <code>")`.
+
+**Shared component**: `src/components/shared/RemoteControlPanel.tsx` — reused by both ADB and OHOS screen mirror panels. Accepts `disabled: boolean` and `onSendKey: (keyCode: number) => Promise<void>` props.
 
 ### 4.2 Serial Module
 
@@ -622,7 +660,7 @@ Custom names are keyed by device serial / connect-key and are applied automatica
 │  List            │   ADB device selected →  Shell / Logcat /    │
 │  ┌────────────┐  │                          File Manager / Apps  │
 │  │ 📱 Dev-1   │  │   OHOS device selected →  Shell / HiLog /   │
-│  │ 📱 emu-1   │  │                          File Manager / Apps  │
+│  │ 📱 emu-1   │  │                  Screen Mirror / File Manager / Apps  │
 │  │ ○ COM3     │  │   Serial device selected → Shell only        │
 │  │ ○ COM7     │  │                                              │
 │  └────────────┘  │                                              │
@@ -661,9 +699,9 @@ Shown when no device is selected. Vertically and horizontally centred within the
 │   │  ADB Devices    │ │  OHOS Devices    │ │ Serial / Telnet │  │
 │   │  • Shell        │ │  • Shell         │ │  • Shell        │  │
 │   │  • Logcat       │ │  • HiLog         │ │                 │  │
-│   │  • Screen Mirror│ │  • File Manager  │ │                 │  │
-│   │  • File Manager │ │  • App Manager   │ │                 │  │
-│   │  • App Manager  │ │                  │ │                 │  │
+│   │  • Screen Mirror│ │  • Screen Mirror │ │                 │  │
+│   │  • File Manager │ │  • File Manager  │ │                 │  │
+│   │  • App Manager  │ │  • App Manager   │ │                 │  │
 │   └─────────────────┘ └──────────────────┘ └─────────────────┘  │
 │                                                                  │
 │           Click + in the sidebar to connect a device.            │
@@ -926,6 +964,14 @@ Bridge/
 │   │   │   ├── apps.rs         # App manager: list packages, install/uninstall
 │   │   │   ├── scrcpy.rs      # Screen mirror: scrcpy process management and config
 │   │   │   └── commands.rs     # Shell stream, install APK, adb_path() resolver
+│   │   ├── hdc/
+│   │   │   ├── mod.rs
+│   │   │   ├── device.rs       # OHOS device scanning, hdc watcher, remount
+│   │   │   ├── file.rs         # File manager commands (send/recv/delete)
+│   │   │   ├── hilog.rs        # HiLog + tlogcat streaming reader
+│   │   │   ├── apps.rs         # App manager: list bundles, install HAP, uninstall
+│   │   │   ├── screen.rs       # Screen mirror: capture loop, hdc_screen_frame/hdc_screen_state events
+│   │   │   └── commands.rs     # Shell stream, run_hdc_shell_command, hdc_path() resolver
 │   │   ├── serial/
 │   │   │   ├── mod.rs
 │   │   │   └── manager.rs      # Port open/close/write, read loop thread, event emission
@@ -956,28 +1002,40 @@ Bridge/
 │   │   │   ├── CatModal.tsx        # View (cat) modal: text/hex, size limit, auto-refresh
 │   │   │   ├── LogcatPanel.tsx
 │   │   │   ├── AppManager.tsx      # App Manager tab: package list, install, uninstall/disable
-│   │   │   ├── ScreenMirrorPanel.tsx  # Screen Mirror tab: scrcpy launch, settings panel
+│   │   │   ├── ScreenMirrorPanel.tsx  # Screen Mirror tab: scrcpy launch, settings, remote control
 │   │   │   └── TransferQueue.tsx
+│   │   ├── hdc/
+│   │   │   ├── HdcFileManager.tsx
+│   │   │   ├── HdcCatModal.tsx
+│   │   │   ├── HilogPanel.tsx
+│   │   │   ├── HdcAppManager.tsx
+│   │   │   └── HdcScreenMirrorPanel.tsx  # Screen Mirror tab: in-app JPEG, remote control
+│   │   ├── shared/
+│   │   │   ├── UploadModal.tsx          # Reusable upload dialog with drag-drop
+│   │   │   └── RemoteControlPanel.tsx   # D-pad + key remote, used by both screen mirror panels
 │   │   └── shell/              # Unified shell for ADB + serial
 │   │       ├── ShellPanel.tsx          # Terminal output + input, serial data subscription
 │   │       └── QuickCommandsPanel.tsx  # Quick command list, add/delete, send to device
 │   ├── store/
-│   │   ├── deviceStore.ts      # zustand — unified device state (ADB + serial)
+│   │   ├── deviceStore.ts      # zustand — unified device state (ADB + OHOS + serial)
 │   │   ├── commandStore.ts     # zustand — quick command list
 │   │   ├── serialStore.ts      # zustand — serial port state
 │   │   └── configStore.ts      # zustand — app config
 │   ├── hooks/
-│   │   ├── useAdbEvents.ts     # Listen to ADB device change events
+│   │   ├── useAdbEvents.ts     # ADB device events, scrcpy state
+│   │   ├── useHdcEvents.ts     # OHOS device events, hilog, screen mirror state/frames
 │   │   ├── useSerialEvents.ts  # useSerialData() + useSerialDisconnect() hooks
 │   │   └── useShellEvents.ts   # useShellOutput() + useShellExit() hooks for streaming shell
 │   ├── utils/
 │   │   ├── adb.ts              # invoke wrappers for ADB commands
+│   │   ├── hdc.ts              # invoke wrappers for OHOS/HDC commands
 │   │   ├── serial.ts           # invoke wrappers for serial commands
 │   │   ├── fs.ts               # invoke wrappers for file write/append (backend-side, avoids plugin-fs scope limits)
 │   │   └── background.ts       # invoke wrappers for background image save/load/remove
 │   ├── types/
-│   │   ├── adb.ts              # AdbDevice interface
-│   │   └── device.ts           # ConnectedDevice interface
+│   │   ├── adb.ts              # AdbDevice, ScrcpyConfig, ScrcpyState
+│   │   ├── hdc.ts              # OhosDevice, HilogEntry, BundleInfo, ScreenFrame, HdcScreenMirrorState
+│   │   └── device.ts           # ConnectedDevice interface (unified ADB + OHOS + serial)
 │   └── styles.css              # Global styles
 │
 ├── CLAUDE.md                   # Claude Code project instructions

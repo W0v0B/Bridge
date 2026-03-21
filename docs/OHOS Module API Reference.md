@@ -2,7 +2,7 @@
 
 > **Project**: Bridge
 > **Module**: OHOS / HDC (`src-tauri/src/hdc/`, `src/utils/hdc.ts`)
-> **Last Updated**: 2026-03
+> **Last Updated**: 2026-03 (v0.3.1)
 
 This document is the complete API reference for the OHOS module. It covers every Tauri command exposed to the frontend, every backend-to-frontend event, and all shared data types. Internal Rust helpers that are not exposed over IPC are not listed here.
 
@@ -17,10 +17,11 @@ This document is the complete API reference for the OHOS module. It covers every
 5. [Commands — Shell](#5-commands--shell)
 6. [Commands — HiLog](#6-commands--hilog)
 7. [Commands — App Manager](#7-commands--app-manager)
-8. [Events (Backend → Frontend)](#8-events-backend--frontend)
-9. [Frontend Utility Wrappers](#9-frontend-utility-wrappers)
-10. [Error Handling](#10-error-handling)
-11. [HDC Tool Resolution](#11-hdc-tool-resolution)
+8. [Commands — Screen Mirror](#8-commands--screen-mirror)
+9. [Events (Backend → Frontend)](#9-events-backend--frontend)
+10. [Frontend Utility Wrappers](#10-frontend-utility-wrappers)
+11. [Error Handling](#11-error-handling)
+12. [HDC Tool Resolution](#12-hdc-tool-resolution)
 
 ---
 
@@ -180,6 +181,50 @@ interface BundleInfo {
 
 ---
 
+### `HdcScreenMirrorConfig`
+
+Input to `start_hdc_screen_mirror`.
+
+```typescript
+interface HdcScreenMirrorConfig {
+  intervalMs: number; // Capture interval in milliseconds (clamped to 333–5000 ms)
+}
+```
+
+```rust
+pub struct ScreenMirrorConfig {
+    pub interval_ms: u64, // camelCase in JSON via #[serde(rename_all = "camelCase")]
+}
+```
+
+---
+
+### `ScreenFrame`
+
+Payload of the `hdc_screen_frame` event. Carries one captured JPEG frame.
+
+```typescript
+interface ScreenFrame {
+  connect_key: string; // Device connect_key this frame belongs to
+  data: string;        // Base64-encoded JPEG image
+}
+```
+
+---
+
+### `HdcScreenMirrorState`
+
+Payload of the `hdc_screen_state` event.
+
+```typescript
+interface HdcScreenMirrorState {
+  connect_key: string; // Device connect_key
+  running: boolean;    // true = mirror is active, false = stopped/exited
+}
+```
+
+---
+
 ### `HdcShellOutput`
 
 Payload of the `hdc_shell_output` event.
@@ -252,7 +297,7 @@ invoke("connect_ohos_device", { addr: string }): Promise<string>
 
 ### `disconnect_ohos_device`
 
-Disconnects an OHOS device over TCP via `hdc tconn <addr> -remove`. Also cleans up cached remount status for the device.
+Disconnects an OHOS device over TCP via `hdc tconn <addr> -remove`. Also cleans up cached remount status and stops any active screen mirror session for the device.
 
 ```typescript
 invoke("disconnect_ohos_device", { addr: string }): Promise<string>
@@ -283,6 +328,8 @@ invoke("disconnect_ohos_device", { addr: string }): Promise<string>
    - `success = exit_status.success() && !has_failure`.
    - Stores `(is_remounted, remount_info)` in `DEVICE_REMOUNT_STATUS: Lazy<Mutex<HashMap<String, (bool, String)>>>`.
    - Re-emits `hdc_devices_changed` with the updated status.
+
+5. When a device disappears from the poll (disconnect detected), spawns `screen::kill_session(connect_key)` to stop any active screen mirror session for that device.
 
 **Notes**: The remount only succeeds on debug/engineering firmware builds. On production firmware it will fail with `[Fail][E007100] Operate need running under debug mode`, which is stored as `remount_info` and displayed in the File Manager UI.
 
@@ -694,7 +741,85 @@ invoke("clear_bundle_data", { connectKey: string, bundleName: string }): Promise
 
 ---
 
-## 8. Events (Backend → Frontend)
+## 8. Commands — Screen Mirror
+
+**Source**: `src-tauri/src/hdc/screen.rs`
+
+Screen mirror captures the device display by running `snapshot_display` on the device, transferring the resulting JPEG via `hdc file recv`, encoding it to base64, and emitting it as a `hdc_screen_frame` event. Frames are captured in a loop at a configurable interval.
+
+---
+
+### `start_hdc_screen_mirror`
+
+Starts screen mirror capture for a device.
+
+```typescript
+invoke("start_hdc_screen_mirror", {
+  connectKey: string,
+  config: HdcScreenMirrorConfig,
+}): Promise<void>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `connectKey` | `string` | Device connect_key |
+| `config` | `HdcScreenMirrorConfig` | Capture configuration |
+
+**Returns**: `void` immediately (capture loop runs in background tokio task).
+
+**Side effects**:
+- If a session is already running for this `connectKey`, it is stopped first.
+- Emits [`hdc_screen_state`](#hdc_screen_state) `{ connect_key, running: true }` on start.
+- Emits [`hdc_screen_frame`](#hdc_screen_frame) events as each JPEG frame is captured and transferred.
+- Emits `hdc_screen_state { running: false }` when the loop exits (manual stop or 5 consecutive failures).
+
+**Implementation**:
+1. Cancellation flag stored in `SCREEN_SESSIONS: Lazy<Mutex<HashMap<String, Arc<AtomicBool>>>>`.
+2. Each iteration: runs `hdc -t {connectKey} shell snapshot_display -f /data/local/tmp/devbridge_screen.jpeg`, then `hdc -t {connectKey} file recv` to a local temp file, reads the file, encodes to base64, and emits a frame event.
+3. Local temp file is deleted after each emit. Remote file is cleaned up on loop exit.
+4. 5 consecutive capture/transfer failures terminate the loop.
+
+**Errors**: Rejects if the cancellation-flag map lock fails (should not occur in practice).
+
+---
+
+### `stop_hdc_screen_mirror`
+
+Stops the screen mirror session for a device.
+
+```typescript
+invoke("stop_hdc_screen_mirror", { connectKey: string }): Promise<void>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `connectKey` | `string` | Device connect_key |
+
+**Returns**: `void`. Does not error if no session is active.
+
+**Implementation**: Removes the cancellation flag from `SCREEN_SESSIONS` and sets it to `true`. The capture loop checks this flag on each iteration and exits cleanly.
+
+---
+
+### `is_hdc_screen_mirror_running`
+
+Checks whether screen mirror is currently active for a device.
+
+```typescript
+invoke("is_hdc_screen_mirror_running", { connectKey: string }): Promise<boolean>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `connectKey` | `string` | Device connect_key |
+
+**Returns**: `true` if a session entry exists in `SCREEN_SESSIONS`, `false` otherwise.
+
+**Notes**: Synchronous (non-async). Checks the in-memory session map only.
+
+---
+
+## 9. Events (Backend → Frontend)
 
 Events are emitted by the Rust backend via `app.emit()` and subscribed to in the frontend via `listen()`.
 
@@ -785,6 +910,37 @@ listen("hilog_exit", (event: { payload: HilogExit }) => { ... })
 
 ---
 
+### `hdc_screen_frame`
+
+Emitted by the screen mirror capture loop for each successfully captured JPEG frame.
+
+```typescript
+listen("hdc_screen_frame", (event: { payload: ScreenFrame }) => { ... })
+```
+
+**Payload**: `ScreenFrame { connect_key, data }` — `data` is a base64-encoded JPEG string, suitable for use as `data:image/jpeg;base64,{data}` in an `<img>` `src`.
+
+**Notes**: Emitted at the interval configured in `HdcScreenMirrorConfig.intervalMs` (333–5000 ms). The frontend should filter by `connect_key` when multiple devices are active.
+
+---
+
+### `hdc_screen_state`
+
+Emitted when a screen mirror session starts or stops.
+
+```typescript
+listen("hdc_screen_state", (event: { payload: HdcScreenMirrorState }) => { ... })
+```
+
+**Payload**: `HdcScreenMirrorState { connect_key, running }`
+
+**Trigger conditions**:
+- `start_hdc_screen_mirror` is called → `running: true`
+- Capture loop exits (manual stop via `stop_hdc_screen_mirror`, or 5 consecutive capture failures) → `running: false`
+- Device disconnects and the device watcher calls `screen::kill_session()` → `running: false`
+
+---
+
 ### `transfer_progress`
 
 Shared with the ADB module. Emitted during `send_hdc_files` and `recv_hdc_file`.
@@ -797,7 +953,7 @@ listen("transfer_progress", (event: { payload: TransferProgress }) => { ... })
 
 ---
 
-## 9. Frontend Utility Wrappers
+## 10. Frontend Utility Wrappers
 
 All wrappers are in `src/utils/hdc.ts` and are thin `invoke()` calls with TypeScript types.
 
@@ -821,6 +977,9 @@ import {
   uninstallBundle,
   forceStopBundle,
   clearBundleData,
+  startHdcScreenMirror,
+  stopHdcScreenMirror,
+  isHdcScreenMirrorRunning,
 } from "../utils/hdc";
 ```
 
@@ -847,10 +1006,13 @@ import {
 | `uninstallBundle(connectKey, bundleName)` | `uninstall_bundle` |
 | `forceStopBundle(connectKey, bundleName)` | `force_stop_bundle` |
 | `clearBundleData(connectKey, bundleName)` | `clear_bundle_data` |
+| `startHdcScreenMirror(connectKey, config)` | `start_hdc_screen_mirror` |
+| `stopHdcScreenMirror(connectKey)` | `stop_hdc_screen_mirror` |
+| `isHdcScreenMirrorRunning(connectKey)` | `is_hdc_screen_mirror_running` |
 
 ---
 
-## 10. Error Handling
+## 11. Error Handling
 
 All Tauri commands return `Result<T, String>` on the Rust side, mapping to a rejected Promise on the frontend. The rejection value is always a plain human-readable string.
 
@@ -880,7 +1042,7 @@ try {
 
 ---
 
-## 11. HDC Tool Resolution
+## 12. HDC Tool Resolution
 
 **Source**: `src-tauri/src/hdc/commands.rs` — `hdc_path()`
 

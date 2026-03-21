@@ -31,3 +31,17 @@ export interface BundleInfo {
   code_path: string;
   app_type: "user" | "system" | "vendor" | "product";
 }
+
+export interface ScreenFrame {
+  connect_key: string;
+  data: string; // base64 JPEG
+}
+
+export interface HdcScreenMirrorState {
+  connect_key: string;
+  running: boolean;
+}
+
+export interface HdcScreenMirrorConfig {
+  intervalMs: number;
+}

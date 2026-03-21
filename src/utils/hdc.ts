@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { OhosDevice, HilogEntry, HilogFilter, BundleInfo } from "../types/hdc";
+import type { OhosDevice, HilogEntry, HilogFilter, BundleInfo, HdcScreenMirrorConfig } from "../types/hdc";
 import type { FileEntry } from "../types/adb";
 
 export async function getOhosDevices() {
@@ -92,4 +92,16 @@ export async function forceStopBundle(connectKey: string, bundleName: string) {
 
 export async function clearBundleData(connectKey: string, bundleName: string) {
   return invoke("clear_bundle_data", { connectKey, bundleName });
+}
+
+export async function startHdcScreenMirror(connectKey: string, config: HdcScreenMirrorConfig) {
+  return invoke("start_hdc_screen_mirror", { connectKey, config });
+}
+
+export async function stopHdcScreenMirror(connectKey: string) {
+  return invoke("stop_hdc_screen_mirror", { connectKey });
+}
+
+export async function isHdcScreenMirrorRunning(connectKey: string) {
+  return invoke<boolean>("is_hdc_screen_mirror_running", { connectKey });
 }

@@ -1,8 +1,8 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useDeviceStore } from "../store/deviceStore";
-import { getOhosDevices } from "../utils/hdc";
-import type { OhosDevice, HilogBatch } from "../types/hdc";
+import { getOhosDevices, isHdcScreenMirrorRunning } from "../utils/hdc";
+import type { OhosDevice, HilogBatch, HdcScreenMirrorState, ScreenFrame } from "../types/hdc";
 
 export function useOhosDeviceEvents() {
   const syncOhosDevices = useDeviceStore((s) => s.syncOhosDevices);
@@ -106,4 +106,53 @@ export function useHilogEvents(onBatch: (batch: HilogBatch) => void) {
       unlisten.then((fn) => fn());
     };
   }, []);
+}
+
+export function useHdcScreenMirrorState(connectKey: string | null) {
+  const [running, setRunning] = useState(false);
+
+  useEffect(() => {
+    if (!connectKey) {
+      setRunning(false);
+      return;
+    }
+
+    isHdcScreenMirrorRunning(connectKey)
+      .then(setRunning)
+      .catch(() => {});
+
+    const unlisten = listen<HdcScreenMirrorState>("hdc_screen_state", (event) => {
+      if (event.payload.connect_key === connectKey) {
+        setRunning(event.payload.running);
+      }
+    });
+
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, [connectKey]);
+
+  return { running };
+}
+
+export function useHdcScreenFrame(
+  connectKey: string | null,
+  onFrame: (data: string) => void
+) {
+  const callbackRef = useRef(onFrame);
+  callbackRef.current = onFrame;
+
+  useEffect(() => {
+    if (!connectKey) return;
+
+    const unlisten = listen<ScreenFrame>("hdc_screen_frame", (event) => {
+      if (event.payload.connect_key === connectKey) {
+        callbackRef.current(event.payload.data);
+      }
+    });
+
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, [connectKey]);
 }

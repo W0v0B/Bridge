@@ -886,6 +886,14 @@ invoke("is_scrcpy_running", { serial: string }): Promise<boolean>
 
 ---
 
+#### Remote Control Panel
+
+`ScreenMirrorPanel.tsx` includes a remote control panel (D-pad, Home, Back, Menu, Vol+/Vol−, Power) rendered alongside the scrcpy settings. Each button sends `input keyevent <code>` via the existing `runShellCommand(serial, command)` wrapper — no new backend commands are required. The panel is disabled when no ADB device is selected.
+
+The remote control UI is implemented in the shared component `src/components/shared/RemoteControlPanel.tsx`, which is also used by the OHOS Screen Mirror panel.
+
+---
+
 #### Auto-cleanup on device disconnect
 
 The device watcher (`device.rs::start_device_watcher`) compares the current device list with the previous poll result. When a device serial disappears, it spawns `scrcpy::stop(serial)` to kill the scrcpy window. This handles unexpected disconnects (cable pull, reboot) in addition to UI-initiated disconnects.

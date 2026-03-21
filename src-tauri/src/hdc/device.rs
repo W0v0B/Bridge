@@ -128,6 +128,7 @@ pub async fn disconnect_device(addr: &str) -> Result<String, String> {
     tokio::join!(
         super::hilog::kill_streams_for_device(addr),
         super::commands::kill_shell_stream(addr),
+        super::screen::kill_session(addr),
     );
 
     let result = run_hdc(&["tconn", addr, "-remove"]).await;
@@ -233,6 +234,8 @@ pub fn start_device_watcher(app: AppHandle) {
                         if let Ok(mut map) = DEVICE_REMOUNT_STATUS.lock() {
                             map.remove(key);
                         }
+                        let ck = key.clone();
+                        tokio::spawn(async move { super::screen::kill_session(&ck).await; });
                         false
                     }
                 });

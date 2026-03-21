@@ -21,7 +21,8 @@ import {
 import { open } from "@tauri-apps/plugin-dialog";
 import { useDeviceStore } from "../../store/deviceStore";
 import { useScrcpyState } from "../../hooks/useAdbEvents";
-import { startScrcpy, stopScrcpy, isScrcpyRunning } from "../../utils/adb";
+import { startScrcpy, stopScrcpy, isScrcpyRunning, runShellCommand } from "../../utils/adb";
+import { RemoteControlPanel } from "../shared/RemoteControlPanel";
 import type { ScrcpyConfig } from "../../types/adb";
 
 const { Text } = Typography;
@@ -123,10 +124,24 @@ export function ScreenMirrorPanel() {
     }
   }, [updateConfig]);
 
+  const sendKey = useCallback(async (keyCode: number) => {
+    if (!serial) return;
+    try {
+      await runShellCommand(serial, `input keyevent ${keyCode}`);
+    } catch (err: unknown) {
+      message.error(String(err));
+    }
+  }, [serial, message]);
+
   if (!serial) {
     return (
-      <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
-        <Text type="secondary">Select an ADB device to use Screen Mirror</Text>
+      <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "row", overflow: "hidden" }}>
+        <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <Text type="secondary">Select an ADB device to use Screen Mirror</Text>
+        </div>
+        <div style={{ display: "flex", alignItems: "center" }}>
+          <RemoteControlPanel disabled onSendKey={sendKey} />
+        </div>
       </div>
     );
   }
@@ -335,25 +350,31 @@ export function ScreenMirrorPanel() {
         </Tag>
       </div>
 
-      {/* Settings Panel */}
-      {configVisible && (
-        <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
-          <Collapse
-            items={collapseItems}
-            defaultActiveKey={["display"]}
-            size="small"
-            bordered={false}
-          />
+      {/* Settings + Remote side by side */}
+      <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "row", overflow: "hidden" }}>
+        {/* Settings / placeholder */}
+        <div style={{ flex: 1, minWidth: 0, overflow: "auto" }}>
+          {configVisible && (
+            <Collapse
+              items={collapseItems}
+              defaultActiveKey={["display"]}
+              size="small"
+              bordered={false}
+            />
+          )}
+          {!configVisible && (
+            <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 8 }}>
+              <DesktopOutlined style={{ fontSize: 48, opacity: 0.3 }} />
+              <Text type="secondary">Click "Start Mirror" to launch scrcpy</Text>
+            </div>
+          )}
         </div>
-      )}
 
-      {/* Placeholder when settings hidden and not running */}
-      {!configVisible && !running && (
-        <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 8 }}>
-          <DesktopOutlined style={{ fontSize: 48, opacity: 0.3 }} />
-          <Text type="secondary">Click "Start Mirror" to launch scrcpy</Text>
+        {/* Remote control panel */}
+        <div style={{ display: "flex", alignItems: "center" }}>
+          <RemoteControlPanel disabled={!serial} onSendKey={sendKey} />
         </div>
-      )}
+      </div>
     </div>
   );
 }

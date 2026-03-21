@@ -8,7 +8,7 @@ use base64::Engine as _;
 use tauri::Manager as _;
 
 use adb::{apps, commands, device, file, logcat, scrcpy};
-use hdc::{apps as hdc_apps, commands as hdc_commands, device as hdc_device, file as hdc_file, hilog};
+use hdc::{apps as hdc_apps, commands as hdc_commands, device as hdc_device, file as hdc_file, hilog, screen as hdc_screen};
 use serial::manager;
 use util as script_util;
 
@@ -82,6 +82,10 @@ pub fn run() {
             uninstall_bundle,
             force_stop_bundle,
             clear_bundle_data,
+            // HDC screen mirror commands
+            start_hdc_screen_mirror,
+            stop_hdc_screen_mirror,
+            is_hdc_screen_mirror_running,
             // Serial commands
             list_serial_ports,
             open_serial_port,
@@ -400,6 +404,27 @@ async fn force_stop_bundle(connect_key: String, bundle_name: String) -> Result<(
 #[tauri::command]
 async fn clear_bundle_data(connect_key: String, bundle_name: String) -> Result<(), String> {
     hdc_apps::clear_bundle_data(&connect_key, &bundle_name).await
+}
+
+// ── HDC Screen Mirror Commands ──
+
+#[tauri::command]
+async fn start_hdc_screen_mirror(
+    connect_key: String,
+    config: hdc_screen::ScreenMirrorConfig,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    hdc_screen::start(&connect_key, config, app).await
+}
+
+#[tauri::command]
+async fn stop_hdc_screen_mirror(connect_key: String) -> Result<(), String> {
+    hdc_screen::stop(&connect_key).await
+}
+
+#[tauri::command]
+fn is_hdc_screen_mirror_running(connect_key: String) -> bool {
+    hdc_screen::is_running(&connect_key)
 }
 
 // ── Script Execution ──

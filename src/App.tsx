@@ -13,6 +13,7 @@ import { ScreenMirrorPanel } from "./components/adb/ScreenMirrorPanel";
 import { TransferQueue } from "./components/adb/TransferQueue";
 import { ShellPanel } from "./components/shell/ShellPanel";
 import { HilogPanel } from "./components/hdc/HilogPanel";
+import { HdcScreenMirrorPanel } from "./components/hdc/HdcScreenMirrorPanel";
 import { HdcFileManager } from "./components/hdc/HdcFileManager";
 import { HdcAppManager } from "./components/hdc/HdcAppManager";
 import { useDeviceEvents } from "./hooks/useAdbEvents";
@@ -64,6 +65,7 @@ const serialTabs = [
 const ohosTabs = [
   { key: "shell", label: "Shell", children: <ShellPanel /> },
   { key: "hilog", label: "HiLog", children: <HilogPanel /> },
+  { key: "screen", label: "Screen Mirror", children: <HdcScreenMirrorPanel /> },
   { key: "files", label: "File Manager", children: <HdcFileManager /> },
   { key: "apps", label: "Apps", children: <HdcAppManager /> },
 ];
