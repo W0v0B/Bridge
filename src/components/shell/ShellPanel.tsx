@@ -607,8 +607,8 @@ export function ShellPanel() {
                 danger
                 type="primary"
                 icon={stopping ? <LoadingOutlined /> : <StopOutlined />}
-                onClick={handleStop}
-                disabled={stopping}
+                onClick={stopping ? undefined : handleStop}
+                style={stopping ? { opacity: 0.65, pointerEvents: "none" } : undefined}
               >
                 {stopping ? "Stopping..." : "Stop"}
               </Button>

@@ -224,7 +224,7 @@ export function AppManager() {
         const typeTag = isDark ? (() => {
           const hex = hexColors[record.app_type] ?? "#8c8c8c";
           return (
-            <Tag style={{ color: hex, background: "var(--card-bg)", border: `1px solid ${hex}80` }}>
+            <Tag style={{ color: hex, backgroundColor: "var(--card-bg)", border: `1px solid ${hex}80` }}>
               {record.app_type}
             </Tag>
           );
@@ -234,7 +234,7 @@ export function AppManager() {
             {typeTag}
             {record.is_hidden && (
               isDark
-                ? <Tag style={{ color: "#ff4d4f", background: "var(--card-bg)", border: "1px solid #ff4d4f80" }}>hidden</Tag>
+                ? <Tag style={{ color: "#ff4d4f", backgroundColor: "var(--card-bg)", border: "1px solid #ff4d4f80" }}>hidden</Tag>
                 : <Tag color="red">hidden</Tag>
             )}
             {record.is_disabled && <Tag color="default">disabled</Tag>}
