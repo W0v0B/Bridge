@@ -175,4 +175,8 @@ Bridge/
 
 ## License
 
-This project is not yet open-sourced under a public license. All rights reserved.
+This project is licensed under the [MIT License](LICENSE).
+
+Copyright (c) 2026 W0v0B
+
+Third-party dependency attributions are listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).

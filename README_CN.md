@@ -175,4 +175,8 @@ Bridge/
 
 ## 许可证
 
-本项目尚未以公开许可证发布，保留所有权利。
+本项目基于 [MIT 许可证](LICENSE) 开源。
+
+Copyright (c) 2026 W0v0B
+
+第三方依赖的许可声明详见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
