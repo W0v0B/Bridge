@@ -4,7 +4,7 @@
 <p align="center">统一的桌面调试工具箱，支持 Android（ADB）、OpenHarmony（HDC）和串口设备</p>
 
 <p align="center">
-  <img src="app-icon.png" width="96" alt="Bridge 图标" />
+  <img src="src-tauri/icons/icon.png" width="96" alt="Bridge 图标" />
 </p>
 
 <p align="center">

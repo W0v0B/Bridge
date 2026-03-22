@@ -4,7 +4,7 @@
 <p align="center">A unified desktop debugging toolkit for Android (ADB), OpenHarmony (HDC), and Serial devices</p>
 
 <p align="center">
-  <img src="app-icon.png" width="96" alt="Bridge icon" />
+  <img src="src-tauri/icons/icon.png" width="96" alt="Bridge icon" />
 </p>
 
 <p align="center">
