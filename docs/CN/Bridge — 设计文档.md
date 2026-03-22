@@ -753,8 +753,10 @@ interface ConnectedDevice {
 
 **性能优化：**
 - ADB 后端以 8KB 块读取标准输出；串口后端以 1024 字节块读取，超时 100 毫秒。两者自然地将输出批量合并为更少的 IPC 事件。
-- 前端使用基于 `requestAnimationFrame` 的渲染批处理（`scheduleFlush`）——单帧内的多个数据事件合并为一次 React 状态更新（最高约 60 fps）。
-- 未选中的设备从不触发 React 重渲染；数据静默累积，直到该设备被选中。
+- 前端使用基于 `requestAnimationFrame` 的批处理（`scheduleFlush`）——单帧内的多个数据事件合并为一次 DOM 写入（最高约 60 fps）。
+- 逐设备 HTML 状态保存在 `htmlStringMap`/`htmlChunksMap` ref 中，直接通过 `innerHTML` 写入输出 `<div>`，完全绕过 React 状态进行输出渲染。
+- ANSI 转义序列由逐设备的 `AnsiConverter` 实例增量解析，该实例在各数据块之间保留 SGR 颜色状态，避免每次写入时对完整缓冲区进行 O(n) 重新解析。
+- 未选中的设备从不触及 DOM；数据静默累积，直到该设备被选中。
 
 ### 6.3 Logcat 标签页布局
 
@@ -789,9 +791,11 @@ interface ConnectedDevice {
 - **底部按钮**：用户向上滚动查看历史记录时出现；点击恢复自动滚动并刷新缓冲数据。
 
 **渲染模型：**
-- 日志行通过对内层内容 `<div>` 直接赋值 `innerHTML` 渲染为单个 HTML 字符串，绕过 React 虚拟 DOM 以实现高吞吐量。
+- 两条渲染路径共享同一内容 `<div>`（均绕过 React 虚拟 DOM）：
+  - **流式路径**（`flushToDOM`）：通过 `insertAdjacentHTML("beforeend", …)` 追加新条目——每帧 O(新条目数)。多余的子节点直接从 DOM 中移除，无需字符串扫描。
+  - **重建路径**（`rebuildAndFlush`）：从有界内存条目数组替换 `innerHTML`——O(最大行数)。用于过滤器/设备/模式变更，以及自动滚动恢复后的追赶渲染。
 - 颜色通过 CSS 类（`.log-v`、`.log-d`、`.log-i`、`.log-w`、`.log-e`）而非逐元素内联样式应用。
-- 用户向上滚动（自动滚动暂停）时，DOM 更新完全暂停——新数据在内存缓冲区中累积而不触及 DOM，允许不间断滚动。恢复后，缓冲区一次性刷新。
+- 用户向上滚动（自动滚动暂停）时，DOM 更新完全暂停，待处理的 HTML 缓冲立即丢弃（原始条目保留在内存中）。恢复后，`rebuildAndFlush` 从有界条目数组重建——延迟到下一动画帧执行，以避免滚动锚定事件引发的界面冻结。
 - 级别过滤同时在客户端（用于显示和导出）和服务端（传递给 `start_logcat` 后端命令）应用。
 
 ### 6.4 文件管理器标签页布局

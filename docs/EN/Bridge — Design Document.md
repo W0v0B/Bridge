@@ -753,8 +753,10 @@ Shown when no device is selected. Vertically and horizontally centred within the
 
 **Performance optimizations:**
 - ADB backend reads stdout in 8KB chunks; serial backend reads in 1024-byte chunks with a 100 ms timeout. Both naturally batch output into fewer IPC events.
-- Frontend uses `requestAnimationFrame`-based render batching (`scheduleFlush`) — multiple data events within a single frame are coalesced into one React state update (~60 fps max).
-- Non-selected devices never trigger a React re-render; data is accumulated silently until that device is selected.
+- Frontend uses `requestAnimationFrame`-based batching (`scheduleFlush`) — multiple data events within a single frame are coalesced into one DOM write per device (~60 fps max).
+- Per-device HTML state is held in `htmlStringMap`/`htmlChunksMap` refs and written directly to the output `<div>` via `innerHTML`, bypassing React state entirely for output rendering.
+- ANSI escape sequences are parsed incrementally by a per-device `AnsiConverter` instance that preserves SGR color state across chunks, avoiding O(n) re-parsing of the full buffer on each write.
+- Non-selected devices never touch the DOM; data accumulates silently until that device is selected.
 
 ### 6.3 Logcat Tab Layout
 
@@ -789,9 +791,11 @@ Shown when no device is selected. Vertically and horizontally centred within the
 - **Bottom button**: appears when the user has scrolled up to read history; click to resume auto-scroll and flush buffered data.
 
 **Rendering model:**
-- Log lines are rendered as a single HTML string via direct `innerHTML` assignment on an inner content `<div>`, bypassing React's virtual DOM for high throughput.
+- Two rendering paths share the same content `<div>` (both bypass React's virtual DOM):
+  - **Streaming path** (`flushToDOM`): appends new entries via `insertAdjacentHTML("beforeend", …)` — O(new entries) per frame. Excess children are removed directly from the DOM without string scanning.
+  - **Rebuild path** (`rebuildAndFlush`): replaces `innerHTML` from the bounded in-memory entry array — O(max lines). Used on filter/device/mode changes and when catching up after auto-scroll resumes.
 - Color is applied via CSS classes (`.log-v`, `.log-d`, `.log-i`, `.log-w`, `.log-e`) rather than per-element inline styles.
-- While the user is scrolled up (auto-scroll paused), DOM updates are suspended entirely — new data accumulates in the in-memory buffer without touching the DOM, allowing uninterrupted scrolling. On resume, the buffer is flushed at once.
+- While the user is scrolled up (auto-scroll paused), DOM updates are fully suspended and the pending HTML buffer is discarded immediately (raw entries are retained in memory). On resume, `rebuildAndFlush` rebuilds from the bounded entry array — deferred to the next animation frame to avoid freezes caused by scroll-anchoring events.
 - Level filtering is applied both client-side (for display and export) and server-side (passed to the `start_logcat` backend command).
 
 ### 6.4 File Manager Tab Layout
