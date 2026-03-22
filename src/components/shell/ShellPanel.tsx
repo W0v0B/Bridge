@@ -3,7 +3,7 @@ import { App, Input, Button, InputNumber, Tooltip, Typography } from "antd";
 import {
   StopOutlined, ClearOutlined, SettingOutlined,
   DownloadOutlined, FileAddOutlined, BgColorsOutlined,
-  DoubleRightOutlined, DoubleLeftOutlined,
+  DoubleRightOutlined, DoubleLeftOutlined, LoadingOutlined,
 } from "@ant-design/icons";
 import { save } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
@@ -18,9 +18,14 @@ import { useSerialData } from "../../hooks/useSerialEvents";
 import { useShellOutput, useShellExit } from "../../hooks/useShellEvents";
 import { useHdcShellOutput, useHdcShellExit } from "../../hooks/useHdcEvents";
 import { QuickCommandsPanel } from "./QuickCommandsPanel";
-import { ansiToHtml, stripAnsi } from "../../utils/ansi";
+import { AnsiConverter, stripAnsi } from "../../utils/ansi";
 
 const { Text } = Typography;
+
+interface HtmlChunk {
+  html: string;
+  lineCount: number;
+}
 
 export function ShellPanel() {
   const { message } = App.useApp();
@@ -30,14 +35,22 @@ export function ShellPanel() {
   const shellMaxLines = useConfigStore((s) => s.config.shellMaxLines);
   const setConfig = useConfigStore((s) => s.setConfig);
 
+  // Raw text buffers — kept for export
   const outputMap = useRef<Record<string, string>>({});
   const inputMap = useRef<Record<string, string>>({});
   const runningMap = useRef<Record<string, boolean>>({});
   const logFileMap = useRef<Record<string, string | null>>({});
 
-  const [output, setOutput] = useState("");
+  // Per-device HTML buffers (bypass React state for output rendering)
+  const htmlStringMap = useRef<Record<string, string>>({});
+  const htmlChunksMap = useRef<Record<string, HtmlChunk[]>>({});
+  const htmlTotalLinesMap = useRef<Record<string, number>>({});
+  const converterMap = useRef<Record<string, AnsiConverter>>({});
+
   const [input, setInput] = useState("");
   const [running, setRunning] = useState(false);
+  const [stopping, setStopping] = useState(false);
+  const stoppingMap = useRef<Record<string, boolean>>({});
   const [showSettings, setShowSettings] = useState(false);
   const [logToFile, setLogToFile] = useState(false);
   const [ansiColor, setAnsiColor] = useState(true);
@@ -49,6 +62,12 @@ export function ShellPanel() {
   const pendingFlush = useRef(false);
   const maxLinesRef = useRef(shellMaxLines);
   maxLinesRef.current = shellMaxLines;
+
+  // Stable refs for use inside callbacks without stale closures
+  const selectedDeviceIdRef = useRef(selectedDeviceId);
+  selectedDeviceIdRef.current = selectedDeviceId;
+  const selectedDeviceRef = useRef(selectedDevice);
+  selectedDeviceRef.current = selectedDevice;
 
   const trimToMaxLines = useCallback((text: string): string => {
     const max = maxLinesRef.current;
@@ -63,44 +82,129 @@ export function ShellPanel() {
     return idx > 0 ? text.slice(idx + 1) : text;
   }, []);
 
-  useEffect(() => {
-    if (selectedDeviceId) {
-      setOutput(outputMap.current[selectedDeviceId] ?? "");
-      setInput(inputMap.current[selectedDeviceId] ?? "");
-      setRunning(runningMap.current[selectedDeviceId] ?? false);
-      setLogToFile(!!logFileMap.current[selectedDeviceId]);
-      setAnsiColor(ansiColorMap.current[selectedDeviceId] ?? true);
-    }
-  }, [selectedDeviceId]);
+  /**
+   * Rebuild the HTML string and chunk array for a device from its raw outputMap text.
+   * Called on device switch or ansiColor toggle.
+   */
+  const rebuildHtmlForDevice = useCallback((deviceId: string, useColor: boolean) => {
+    const rawText = outputMap.current[deviceId] ?? "";
+    const conv = new AnsiConverter();
+    converterMap.current[deviceId] = conv;
 
-  useEffect(() => {
-    if (outputRef.current) {
-      outputRef.current.scrollTop = outputRef.current.scrollHeight;
+    if (!rawText || !useColor) {
+      htmlChunksMap.current[deviceId] = [];
+      htmlTotalLinesMap.current[deviceId] = 0;
+      htmlStringMap.current[deviceId] = "";
+      return;
     }
-  }, [output]);
+
+    const newHtml = conv.convert(rawText);
+    const lineCount = (rawText.match(/\n/g) || []).length;
+    htmlChunksMap.current[deviceId] = [{ html: newHtml, lineCount }];
+    htmlTotalLinesMap.current[deviceId] = lineCount;
+    htmlStringMap.current[deviceId] = newHtml;
+  }, []);
+
+  /** Write the current device's HTML (or placeholder) directly to the output DOM element. */
+  const flushToDOM = useCallback(() => {
+    if (!outputRef.current) return;
+    const deviceId = selectedDeviceIdRef.current;
+    const dev = selectedDeviceRef.current;
+    if (!deviceId) {
+      outputRef.current.textContent = "";
+      return;
+    }
+
+    const useColor = ansiColorMap.current[deviceId] ?? true;
+    if (useColor) {
+      const html = htmlStringMap.current[deviceId];
+      if (html) {
+        outputRef.current.innerHTML = html;
+      } else {
+        outputRef.current.textContent = dev
+          ? `Connected to ${dev.name}\nType a command below.\n`
+          : "";
+      }
+    } else {
+      const raw = outputMap.current[deviceId] ?? "";
+      outputRef.current.textContent = raw
+        ? stripAnsi(raw)
+        : (dev ? `Connected to ${dev.name}\nType a command below.\n` : "");
+    }
+
+    outputRef.current.scrollTop = outputRef.current.scrollHeight;
+  }, []);
 
   const scheduleFlush = useCallback(() => {
     if (pendingFlush.current) return;
     pendingFlush.current = true;
     rafId.current = requestAnimationFrame(() => {
       pendingFlush.current = false;
-      if (selectedDeviceId) {
-        setOutput(outputMap.current[selectedDeviceId] ?? "");
-      }
+      flushToDOM();
     });
-  }, [selectedDeviceId]);
+  }, [flushToDOM]);
 
   useEffect(() => {
     return () => cancelAnimationFrame(rafId.current);
   }, []);
 
+  // On device switch: restore HTML state for the new device
+  useEffect(() => {
+    if (selectedDeviceId) {
+      const useColor = ansiColorMap.current[selectedDeviceId] ?? true;
+      // Only rebuild if we don't already have a rendered HTML string
+      if (htmlStringMap.current[selectedDeviceId] === undefined) {
+        rebuildHtmlForDevice(selectedDeviceId, useColor);
+      }
+      setInput(inputMap.current[selectedDeviceId] ?? "");
+      setRunning(runningMap.current[selectedDeviceId] ?? false);
+      setStopping(stoppingMap.current[selectedDeviceId] ?? false);
+      setLogToFile(!!logFileMap.current[selectedDeviceId]);
+      setAnsiColor(ansiColorMap.current[selectedDeviceId] ?? true);
+    }
+    flushToDOM();
+  }, [selectedDeviceId, rebuildHtmlForDevice, flushToDOM]);
+
   const writeToDeviceBuffer = useCallback((deviceId: string, text: string) => {
+    // Update raw text (for export)
     outputMap.current[deviceId] = trimToMaxLines(
       (outputMap.current[deviceId] ?? "") + text
     );
+
+    // Update HTML incrementally for the active device only
     if (deviceId === selectedDeviceId) {
+      const useColor = ansiColorMap.current[deviceId] ?? true;
+
+      if (useColor) {
+        if (!converterMap.current[deviceId]) {
+          converterMap.current[deviceId] = new AnsiConverter();
+        }
+        const newHtml = converterMap.current[deviceId].convert(text);
+        const lineCount = (text.match(/\n/g) || []).length;
+
+        const chunks = (htmlChunksMap.current[deviceId] ??= []);
+        chunks.push({ html: newHtml, lineCount });
+
+        let total = (htmlTotalLinesMap.current[deviceId] ?? 0) + lineCount;
+        const max = maxLinesRef.current;
+
+        if (max > 0 && total > max) {
+          while (total > max && chunks.length > 1) {
+            total -= chunks.shift()!.lineCount;
+          }
+          htmlTotalLinesMap.current[deviceId] = total;
+          htmlStringMap.current[deviceId] = chunks.map((c) => c.html).join("");
+        } else {
+          htmlTotalLinesMap.current[deviceId] = total;
+          htmlStringMap.current[deviceId] =
+            (htmlStringMap.current[deviceId] ?? "") + newHtml;
+        }
+      }
+      // For !useColor, flushToDOM reads outputMap directly via textContent
+
       scheduleFlush();
     }
+
     const logPath = logFileMap.current[deviceId];
     if (logPath) {
       appendTextToFile(logPath, text).catch(() => {});
@@ -154,6 +258,8 @@ export function ShellPanel() {
           (d) => d.type === "adb" && d.serial === event.serial
         );
         if (!device) return;
+        stoppingMap.current[device.id] = false;
+        if (selectedDeviceIdRef.current === device.id) setStopping(false);
         const exitLine = `\n[Process exited with code ${event.code}]\n`;
         writeToDeviceBuffer(device.id, exitLine);
         setDeviceRunning(device.id, false);
@@ -183,6 +289,8 @@ export function ShellPanel() {
           (d) => d.type === "ohos" && d.serial === event.connect_key
         );
         if (!device) return;
+        stoppingMap.current[device.id] = false;
+        if (selectedDeviceIdRef.current === device.id) setStopping(false);
         const exitLine = `\n[Process exited with code ${event.code}]\n`;
         writeToDeviceBuffer(device.id, exitLine);
         setDeviceRunning(device.id, false);
@@ -191,7 +299,7 @@ export function ShellPanel() {
     )
   );
 
-  // Script output/exit events — use device ID as correlation key
+  // Script output/exit events
   useEffect(() => {
     const unlistenOutput = listen<{ id: string; data: string }>("script_output", (event) => {
       writeToDeviceBuffer(event.payload.id, event.payload.data);
@@ -245,6 +353,8 @@ export function ShellPanel() {
 
   const handleStop = async () => {
     if (!selectedDevice) return;
+    stoppingMap.current[selectedDevice.id] = true;
+    setStopping(true);
     try {
       if (selectedDevice.type === "adb") {
         await stopShellStream(selectedDevice.serial);
@@ -259,7 +369,11 @@ export function ShellPanel() {
   const handleClear = () => {
     if (!selectedDeviceId) return;
     outputMap.current[selectedDeviceId] = "";
-    setOutput("");
+    htmlStringMap.current[selectedDeviceId] = "";
+    htmlChunksMap.current[selectedDeviceId] = [];
+    htmlTotalLinesMap.current[selectedDeviceId] = 0;
+    converterMap.current[selectedDeviceId]?.reset();
+    if (outputRef.current) outputRef.current.innerHTML = "";
   };
 
   const makeLogFilename = () => {
@@ -395,7 +509,11 @@ export function ShellPanel() {
                 onClick={() => {
                   const next = !ansiColor;
                   setAnsiColor(next);
-                  if (selectedDeviceId) ansiColorMap.current[selectedDeviceId] = next;
+                  if (selectedDeviceId) {
+                    ansiColorMap.current[selectedDeviceId] = next;
+                    rebuildHtmlForDevice(selectedDeviceId, next);
+                    flushToDOM();
+                  }
                 }}
               />
             </Tooltip>
@@ -433,7 +551,7 @@ export function ShellPanel() {
             </Tooltip>
           </div>
 
-          {/* Output area */}
+          {/* Output area — content managed directly via ref, no React state */}
           <div
             ref={outputRef}
             style={{
@@ -447,10 +565,6 @@ export function ShellPanel() {
               whiteSpace: "pre-wrap",
               wordBreak: "break-all",
             }}
-            {...(ansiColor
-              ? { dangerouslySetInnerHTML: { __html: output ? ansiToHtml(output) : `Connected to ${selectedDevice.name}\nType a command below.\n` } }
-              : { children: output ? stripAnsi(output) : `Connected to ${selectedDevice.name}\nType a command below.\n` }
-            )}
           />
 
           {/* Input */}
@@ -492,10 +606,11 @@ export function ShellPanel() {
                 size="small"
                 danger
                 type="primary"
-                icon={<StopOutlined />}
+                icon={stopping ? <LoadingOutlined /> : <StopOutlined />}
                 onClick={handleStop}
+                disabled={stopping}
               >
-                Stop
+                {stopping ? "Stopping..." : "Stop"}
               </Button>
             )}
             {selectedDevice.type === "serial" && (

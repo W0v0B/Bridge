@@ -44,9 +44,9 @@ function formatEntry(e: HilogEntry): string {
   return `<div class="${cls}">${ts}${pid}${tid}<b>${e.level}/${esc(e.tag)}:</b> ${esc(e.message)}</div>`;
 }
 
+/** Per-mode buffer storing raw entries. HTML is rebuilt lazily on demand. */
 interface ModeBuffer {
   entries: HilogEntry[];
-  html: string;
 }
 
 export function HilogPanel() {
@@ -60,7 +60,6 @@ export function HilogPanel() {
   const setConfig = useConfigStore((s) => s.setConfig);
 
   const [mode, setMode] = useState<"hilog" | "tlogcat">("hilog");
-  // Per-device-per-mode running state: "connect_key:mode" → boolean
   const [runningMap, setRunningMap] = useState<Record<string, boolean>>({});
   const runningMapRef = useRef<Record<string, boolean>>({});
   const runningKey = selectedDevice ? `${selectedDevice}:${mode}` : mode;
@@ -77,7 +76,6 @@ export function HilogPanel() {
   const [useRegex, setUseRegex] = useState(false);
   const [caseSensitive, setCaseSensitive] = useState(false);
   const [exactMatch, setExactMatch] = useState(false);
-  const [entryCount, setEntryCount] = useState(0);
   const [autoScroll, setAutoScroll] = useState(true);
 
   // Per-device-per-mode log buffers
@@ -90,18 +88,19 @@ export function HilogPanel() {
   const getOrCreateBuffer = useCallback((key: string, m: string): ModeBuffer => {
     const bk = `${key}:${m}`;
     if (!buffers.current[bk]) {
-      buffers.current[bk] = { entries: [], html: "" };
+      buffers.current[bk] = { entries: [] };
     }
     return buffers.current[bk];
   }, []);
 
   const getBuffer = useCallback(() => {
-    if (!selectedDevice) return { entries: [], html: "" } as ModeBuffer;
+    if (!selectedDevice) return { entries: [] } as ModeBuffer;
     return getOrCreateBuffer(selectedDevice, mode);
   }, [selectedDevice, mode, getOrCreateBuffer]);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
+  const entryCountDomRef = useRef<HTMLSpanElement>(null);
   const autoScrollRef = useRef(true);
   const maxLinesRef = useRef(logcatMaxLines);
   maxLinesRef.current = logcatMaxLines;
@@ -110,25 +109,62 @@ export function HilogPanel() {
   const pendingFlush = useRef(false);
   const domStale = useRef(false);
 
+  // Pending HTML for incremental append (new entries since last flush)
+  const pendingHtml = useRef("");
+
+  /**
+   * Streaming flush: appends pending HTML via insertAdjacentHTML, then trims
+   * excess DOM children. O(new_entries + excess) instead of O(all_entries).
+   */
   const flushToDOM = useCallback(() => {
-    const key = selectedDeviceRef.current;
-    if (!key) return;
-    const bk = `${key}:${modeRef.current}`;
-    const buf = buffers.current[bk];
-    if (!buf) return;
-    if (contentRef.current) {
-      contentRef.current.innerHTML = buf.html;
+    if (!contentRef.current) return;
+    const pending = pendingHtml.current;
+    if (pending) {
+      contentRef.current.insertAdjacentHTML("beforeend", pending);
+      pendingHtml.current = "";
+      // DOM-based trim: remove oldest children when over max
+      const max = maxLinesRef.current;
+      if (max > 0) {
+        while (contentRef.current.children.length > max) {
+          contentRef.current.firstElementChild?.remove();
+        }
+      }
+      if (entryCountDomRef.current) {
+        const key = selectedDeviceRef.current;
+        if (key) {
+          const buf = buffers.current[`${key}:${modeRef.current}`];
+          entryCountDomRef.current.textContent = `${buf?.entries.length ?? 0} lines`;
+        }
+      }
     }
-    setEntryCount(buf.entries.length);
     domStale.current = false;
     if (autoScrollRef.current && scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, []);
 
+  /**
+   * Full rebuild flush: replaces entire DOM content with pre-built HTML.
+   * Used after filter/device/mode changes. O(all_visible_entries).
+   */
+  const rebuildAndFlush = useCallback(() => {
+    if (!selectedDevice || !contentRef.current) return;
+    const buf = buffers.current[`${selectedDevice}:${mode}`];
+    pendingHtml.current = "";
+    contentRef.current.innerHTML = buf ? buildHtml(buf) : "";
+    if (entryCountDomRef.current) {
+      entryCountDomRef.current.textContent = `${buf?.entries.length ?? 0} lines`;
+    }
+    domStale.current = false;
+    if (autoScrollRef.current && scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [selectedDevice, mode]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const scheduleFlush = useCallback(() => {
     if (!autoScrollRef.current) {
       domStale.current = true;
+      pendingHtml.current = ""; // rebuildAndFlush will rebuild from buf.entries; no point buffering
       return;
     }
     if (pendingFlush.current) return;
@@ -157,18 +193,30 @@ export function HilogPanel() {
     if (atBottom && !autoScrollRef.current) {
       autoScrollRef.current = true;
       setAutoScroll(true);
-      if (domStale.current) flushToDOM();
+      if (domStale.current) {
+        // Defer the rebuild to the next animation frame — never do heavy DOM work
+        // synchronously inside a scroll handler (scroll anchoring can trigger this
+        // mid-streaming, causing a UI freeze that looks like a crash).
+        if (!pendingFlush.current) {
+          pendingFlush.current = true;
+          cancelAnimationFrame(rafId.current);
+          rafId.current = requestAnimationFrame(() => {
+            pendingFlush.current = false;
+            rebuildAndFlush();
+          });
+        }
+      }
     }
-  }, [flushToDOM]);
+  }, [rebuildAndFlush]);
 
   const scrollToBottom = useCallback(() => {
     autoScrollRef.current = true;
     setAutoScroll(true);
-    if (domStale.current) flushToDOM();
+    if (domStale.current) rebuildAndFlush();
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [flushToDOM]);
+  }, [rebuildAndFlush]);
 
   const buildMatcher = useCallback((): ((text: string) => boolean) | null => {
     if (!filterText) return null;
@@ -209,51 +257,31 @@ export function HilogPanel() {
     [level, buildMatcher]
   );
 
-  const trimHtml = useCallback((html: string): string => {
-    const max = maxLinesRef.current;
-    if (max <= 0) return html;
-    let count = 0;
-    let idx = html.length;
-    while (count < max) {
-      const pos = html.lastIndexOf("</div>", idx - 1);
-      if (pos === -1) return html;
-      idx = pos;
-      count++;
-    }
-    const startOfDiv = html.lastIndexOf("<div", idx - 1);
-    return startOfDiv > 0 ? html.slice(startOfDiv) : html;
-  }, []);
-
-  const rebuildHtml = useCallback(
+  /** Build HTML for a buffer from its entries using the current filter. */
+  const buildHtml = useCallback(
     (buf: ModeBuffer) => {
+      const max = maxLinesRef.current;
+      const entries = max > 0 ? buf.entries.slice(-max) : buf.entries;
       let html = "";
-      for (const entry of buf.entries) {
-        if (passesFilter(entry)) {
-          html += formatEntry(entry);
-        }
+      for (const entry of entries) {
+        if (passesFilter(entry)) html += formatEntry(entry);
       }
-      buf.html = trimHtml(html);
+      return html;
     },
-    [passesFilter, trimHtml]
+    [passesFilter]
   );
 
-  // When filter/mode/device changes, rebuild display
+  // Rebuild DOM when filter/mode/device changes
   useEffect(() => {
-    if (!selectedDevice) return;
-    const bk = `${selectedDevice}:${mode}`;
-    const buf = buffers.current[bk];
-    if (buf) {
-      rebuildHtml(buf);
-    }
-    flushToDOM();
-  }, [level, filterText, useRegex, caseSensitive, exactMatch, mode, selectedDevice, rebuildHtml, flushToDOM]);
+    rebuildAndFlush();
+  }, [level, filterText, useRegex, caseSensitive, exactMatch, mode, selectedDevice, rebuildAndFlush]);
 
   const addEntries = useCallback(
     (connectKey: string, targetMode: "hilog" | "tlogcat", batch: HilogEntry[]) => {
       const max = maxLinesRef.current;
       const bk = `${connectKey}:${targetMode}`;
       if (!buffers.current[bk]) {
-        buffers.current[bk] = { entries: [], html: "" };
+        buffers.current[bk] = { entries: [] };
       }
       const buf = buffers.current[bk];
 
@@ -262,7 +290,7 @@ export function HilogPanel() {
         buf.entries = buf.entries.slice(-max);
       }
 
-      // Only build incremental HTML if this is the currently displayed device+mode
+      // Only append to DOM if this is the currently displayed device+mode
       if (connectKey === selectedDeviceRef.current && targetMode === modeRef.current) {
         let newHtml = "";
         for (const entry of batch) {
@@ -271,13 +299,12 @@ export function HilogPanel() {
           }
         }
         if (newHtml) {
-          buf.html += newHtml;
-          buf.html = trimHtml(buf.html);
+          pendingHtml.current += newHtml;
           scheduleFlush();
         }
       }
     },
-    [passesFilter, scheduleFlush, trimHtml]
+    [passesFilter, scheduleFlush]
   );
 
   useHilogEvents(
@@ -358,9 +385,9 @@ export function HilogPanel() {
   const clearDisplay = () => {
     const buf = getBuffer();
     buf.entries = [];
-    buf.html = "";
+    pendingHtml.current = "";
     if (contentRef.current) contentRef.current.innerHTML = "";
-    setEntryCount(0);
+    if (entryCountDomRef.current) entryCountDomRef.current.textContent = "0 lines";
   };
 
   const handleClear = async () => {
@@ -506,7 +533,7 @@ export function HilogPanel() {
         </Space>
 
         <div style={{ display: "flex", alignItems: "center", gap: 4, marginLeft: "auto" }}>
-          <span style={{ color: "#999", fontSize: 11, whiteSpace: "nowrap" }}>{entryCount} lines</span>
+          <span ref={entryCountDomRef} style={{ color: "#999", fontSize: 11, whiteSpace: "nowrap" }}>0 lines</span>
           <Space.Compact size="small">
             <Input value="Max" disabled style={{ width: 40, textAlign: "center", color: "inherit" }} />
             <InputNumber

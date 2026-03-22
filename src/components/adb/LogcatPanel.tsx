@@ -54,10 +54,9 @@ function formatEntry(e: LogEntry): string {
   return `<div class="${cls}">${ts}${pid}${tid}<b>${e.level}/${esc(e.tag)}:</b> ${esc(e.message)}</div>`;
 }
 
-/** Per-mode buffer storing raw entries and pre-built HTML. */
+/** Per-mode buffer storing raw entries. HTML is rebuilt lazily on demand. */
 interface ModeBuffer {
   entries: LogEntry[];
-  html: string;
 }
 
 export function LogcatPanel() {
@@ -90,28 +89,26 @@ export function LogcatPanel() {
   const [caseSensitive, setCaseSensitive] = useState(false);
   const [exactMatch, setExactMatch] = useState(false);
 
-  // Per-device-per-mode log buffers — keyed by "serial:mode", survives device/mode switches
+  // Per-device-per-mode log buffers — keyed by "serial:mode"
   const buffers = useRef<Record<string, ModeBuffer>>({});
 
   const getOrCreateBuffer = useCallback((serial: string, m: string): ModeBuffer => {
     const key = `${serial}:${m}`;
     if (!buffers.current[key]) {
-      buffers.current[key] = { entries: [], html: "" };
+      buffers.current[key] = { entries: [] };
     }
     return buffers.current[key];
   }, []);
 
-  // Active buffer shortcut (current device + current mode)
   const getBuffer = useCallback(() => {
-    if (!selectedDevice) return { entries: [], html: "" } as ModeBuffer;
+    if (!selectedDevice) return { entries: [] } as ModeBuffer;
     return getOrCreateBuffer(selectedDevice, mode);
   }, [selectedDevice, mode, getOrCreateBuffer]);
-
-  const [entryCount, setEntryCount] = useState(0);
 
   // Scroll container (outer) and content container (inner ref — bypasses React rendering)
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
+  const entryCountDomRef = useRef<HTMLSpanElement>(null);
   const autoScrollRef = useRef(true);
   const [autoScroll, setAutoScroll] = useState(true);
   const modeRef = useRef(mode);
@@ -122,23 +119,39 @@ export function LogcatPanel() {
   // RAF batching
   const rafId = useRef(0);
   const pendingFlush = useRef(false);
-  // Track whether DOM is stale (user was scrolling when new data arrived)
   const domStale = useRef(false);
+
+  // Pending HTML for incremental append (new entries since last flush)
+  const pendingHtml = useRef("");
 
   const selectedDeviceRef = useRef(selectedDevice);
   selectedDeviceRef.current = selectedDevice;
 
-  /** Write buffer HTML to DOM. Always safe to call. */
+  /**
+   * Streaming flush: appends pending HTML via insertAdjacentHTML, then trims
+   * excess DOM children. O(new_entries + excess) instead of O(all_entries).
+   */
   const flushToDOM = useCallback(() => {
-    const serial = selectedDeviceRef.current;
-    if (!serial) return;
-    const key = `${serial}:${modeRef.current}`;
-    const buf = buffers.current[key];
-    if (!buf) return;
-    if (contentRef.current) {
-      contentRef.current.innerHTML = buf.html;
+    if (!contentRef.current) return;
+    const pending = pendingHtml.current;
+    if (pending) {
+      contentRef.current.insertAdjacentHTML("beforeend", pending);
+      pendingHtml.current = "";
+      // DOM-based trim: remove oldest children when over max
+      const max = maxLinesRef.current;
+      if (max > 0) {
+        while (contentRef.current.children.length > max) {
+          contentRef.current.firstElementChild?.remove();
+        }
+      }
+      if (entryCountDomRef.current) {
+        const serial = selectedDeviceRef.current;
+        if (serial) {
+          const buf = buffers.current[`${serial}:${modeRef.current}`];
+          entryCountDomRef.current.textContent = `${buf?.entries.length ?? 0} lines`;
+        }
+      }
     }
-    setEntryCount(buf.entries.length);
     domStale.current = false;
     if (autoScrollRef.current && scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -146,15 +159,31 @@ export function LogcatPanel() {
   }, []);
 
   /**
-   * Schedule a DOM flush on the next animation frame.
-   * If the user has paused auto-scroll (reading history), we skip DOM
-   * updates entirely so innerHTML replacement doesn't fight the scroll.
-   * The buffer keeps accumulating — we catch up when auto-scroll resumes.
+   * Full rebuild flush: replaces entire DOM content with pre-built HTML.
+   * Used after filter/device/mode changes. O(all_visible_entries).
+   */
+  const rebuildAndFlush = useCallback(() => {
+    if (!selectedDevice || !contentRef.current) return;
+    const buf = buffers.current[`${selectedDevice}:${mode}`];
+    pendingHtml.current = ""; // discard any streaming pending
+    contentRef.current.innerHTML = buf ? buildHtml(buf) : "";
+    if (entryCountDomRef.current) {
+      entryCountDomRef.current.textContent = `${buf?.entries.length ?? 0} lines`;
+    }
+    domStale.current = false;
+    if (autoScrollRef.current && scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [selectedDevice, mode]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /**
+   * Schedule a streaming DOM flush on the next animation frame.
+   * Skips DOM update when user has paused auto-scroll.
    */
   const scheduleFlush = useCallback(() => {
     if (!autoScrollRef.current) {
-      // Don't touch the DOM while user is scrolling — just mark stale
       domStale.current = true;
+      pendingHtml.current = ""; // rebuildAndFlush will rebuild from buf.entries; no point buffering
       return;
     }
     if (pendingFlush.current) return;
@@ -185,20 +214,30 @@ export function LogcatPanel() {
     if (atBottom && !autoScrollRef.current) {
       autoScrollRef.current = true;
       setAutoScroll(true);
-      // Catch up on any data that arrived while user was scrolling
-      if (domStale.current) flushToDOM();
+      if (domStale.current) {
+        // Defer the rebuild to the next animation frame — never do heavy DOM work
+        // synchronously inside a scroll handler (scroll anchoring can trigger this
+        // mid-streaming, causing a UI freeze that looks like a crash).
+        if (!pendingFlush.current) {
+          pendingFlush.current = true;
+          cancelAnimationFrame(rafId.current);
+          rafId.current = requestAnimationFrame(() => {
+            pendingFlush.current = false;
+            rebuildAndFlush();
+          });
+        }
+      }
     }
-  }, [flushToDOM]);
+  }, [rebuildAndFlush]);
 
   const scrollToBottom = useCallback(() => {
     autoScrollRef.current = true;
     setAutoScroll(true);
-    // Catch up on buffered data, then scroll
-    if (domStale.current) flushToDOM();
+    if (domStale.current) rebuildAndFlush();
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [flushToDOM]);
+  }, [rebuildAndFlush]);
 
   /** Build a matcher function from the current filter settings. */
   const buildMatcher = useCallback((): ((text: string) => boolean) | null => {
@@ -246,34 +285,18 @@ export function LogcatPanel() {
     [level, buildMatcher]
   );
 
-  /** Trim HTML buffer to max lines by stripping leading <div>...</div> entries. */
-  const trimHtml = useCallback((html: string): string => {
-    const max = maxLinesRef.current;
-    if (max <= 0) return html;
-    let count = 0;
-    let idx = html.length;
-    while (count < max) {
-      const pos = html.lastIndexOf("</div>", idx - 1);
-      if (pos === -1) return html;
-      idx = pos;
-      count++;
-    }
-    const startOfDiv = html.lastIndexOf("<div", idx - 1);
-    return startOfDiv > 0 ? html.slice(startOfDiv) : html;
-  }, []);
-
-  /** Rebuild HTML for a buffer from its entries using the current filter. */
-  const rebuildHtml = useCallback(
+  /** Build HTML for a buffer from its entries using the current filter (no trim — caller slices). */
+  const buildHtml = useCallback(
     (buf: ModeBuffer) => {
+      const max = maxLinesRef.current;
+      const entries = max > 0 ? buf.entries.slice(-max) : buf.entries;
       let html = "";
-      for (const entry of buf.entries) {
-        if (passesFilter(entry)) {
-          html += formatEntry(entry);
-        }
+      for (const entry of entries) {
+        if (passesFilter(entry)) html += formatEntry(entry);
       }
-      buf.html = trimHtml(html);
+      return html;
     },
-    [passesFilter, trimHtml]
+    [passesFilter]
   );
 
   // Add a batch of entries to a specific device+mode buffer
@@ -282,7 +305,7 @@ export function LogcatPanel() {
       const max = maxLinesRef.current;
       const key = `${serial}:${targetMode}`;
       if (!buffers.current[key]) {
-        buffers.current[key] = { entries: [], html: "" };
+        buffers.current[key] = { entries: [] };
       }
       const buf = buffers.current[key];
 
@@ -291,7 +314,7 @@ export function LogcatPanel() {
         buf.entries = buf.entries.slice(-max);
       }
 
-      // Only build incremental HTML if this is the currently displayed device+mode
+      // Only append to DOM if this is the currently displayed device+mode
       if (serial === selectedDeviceRef.current && targetMode === modeRef.current) {
         let newHtml = "";
         for (const entry of batch) {
@@ -300,27 +323,20 @@ export function LogcatPanel() {
           }
         }
         if (newHtml) {
-          buf.html += newHtml;
-          buf.html = trimHtml(buf.html);
+          pendingHtml.current += newHtml;
           scheduleFlush();
         }
       }
     },
-    [passesFilter, scheduleFlush, trimHtml]
+    [passesFilter, scheduleFlush]
   );
 
-  // When filter/mode/device changes, rebuild display HTML from current device+mode entries
+  // Rebuild DOM when filter/mode/device changes
   useEffect(() => {
-    if (!selectedDevice) return;
-    const key = `${selectedDevice}:${mode}`;
-    const buf = buffers.current[key];
-    if (buf) {
-      rebuildHtml(buf);
-    }
-    flushToDOM();
-  }, [level, filterText, useRegex, caseSensitive, exactMatch, mode, selectedDevice, rebuildHtml, flushToDOM]);
+    rebuildAndFlush();
+  }, [level, filterText, useRegex, caseSensitive, exactMatch, mode, selectedDevice, rebuildAndFlush]);
 
-  // Event subscriptions — each device+mode checks its own running flag
+  // Event subscriptions
   useLogcatEvents(
     useCallback(
       (batch: LogcatBatch) => {
@@ -382,9 +398,9 @@ export function LogcatPanel() {
   const clearDisplay = () => {
     const buf = getBuffer();
     buf.entries = [];
-    buf.html = "";
+    pendingHtml.current = "";
     if (contentRef.current) contentRef.current.innerHTML = "";
-    setEntryCount(0);
+    if (entryCountDomRef.current) entryCountDomRef.current.textContent = "0 lines";
   };
 
   /**
@@ -423,9 +439,7 @@ export function LogcatPanel() {
   };
 
   const handleModeChange = (val: string) => {
-    // Just switch the displayed mode — each mode runs independently in the background
     setMode(val as "logcat" | "tlogcat");
-    // Display will be rebuilt by the filter effect (depends on `mode`)
   };
 
   /** Toggle button style helper */
@@ -554,7 +568,7 @@ export function LogcatPanel() {
 
         {/* Max lines — always visible, compact */}
         <div style={{ display: "flex", alignItems: "center", gap: 4, marginLeft: "auto" }}>
-          <span style={{ color: "#999", fontSize: 11, whiteSpace: "nowrap" }}>{entryCount} lines</span>
+          <span ref={entryCountDomRef} style={{ color: "#999", fontSize: 11, whiteSpace: "nowrap" }}>0 lines</span>
           <Space.Compact size="small">
             <Input value="Max" disabled style={{ width: 40, textAlign: "center", color: "inherit" }} />
             <InputNumber
