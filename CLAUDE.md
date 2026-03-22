@@ -70,4 +70,4 @@ The ADB implementation calls the `adb` CLI binary. The binary is expected to be 
 - **ADB via subprocess**: The Rust backend shells out to `adb` CLI via `tauri-plugin-shell`; it does not use a native Rust ADB library.
 - **Serial port state**: Open serial ports are held in a process-global `Lazy<Mutex<HashMap<String, Box<dyn SerialPort>>>>` in `serial/manager.rs`.
 - **Non-blocking UI**: Long-running operations (file transfer, logcat streaming) must use async Rust and Tauri events to push results to the frontend without blocking.
-- **Design spec**: Full feature and UI design is in `docs/ADB & Serial Port Debugging Tools — Design Document(EN).md` — consult it for intended behavior before implementing features.
+- **Design spec**: Full feature and UI design is in `docs/EN/Bridge — Design Document.md` — consult it for intended behavior before implementing features.
