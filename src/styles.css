@@ -51,6 +51,11 @@ html, body {
   background: var(--scrollbar-thumb-hover);
 }
 
+/* Wider scrollbar for the Shell terminal output area */
+.term-output::-webkit-scrollbar {
+  width: 8px;
+}
+
 /* Ensure Tabs fill available height */
 .ant-tabs {
   flex: 1;

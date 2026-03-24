@@ -3,7 +3,7 @@ import { App, Input, Button, InputNumber, Tooltip, Typography } from "antd";
 import {
   StopOutlined, ClearOutlined, SettingOutlined,
   DownloadOutlined, FileAddOutlined, BgColorsOutlined,
-  DoubleRightOutlined, DoubleLeftOutlined, LoadingOutlined,
+  DoubleRightOutlined, DoubleLeftOutlined, LoadingOutlined, VerticalAlignBottomOutlined,
 } from "@ant-design/icons";
 import { save } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
@@ -51,6 +51,8 @@ export function ShellPanel() {
   const [running, setRunning] = useState(false);
   const [stopping, setStopping] = useState(false);
   const stoppingMap = useRef<Record<string, boolean>>({});
+  const autoScrollRef = useRef(true);
+  const [autoScroll, setAutoScroll] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
   const [logToFile, setLogToFile] = useState(false);
   const [ansiColor, setAnsiColor] = useState(true);
@@ -60,6 +62,7 @@ export function ShellPanel() {
   const outputRef = useRef<HTMLDivElement>(null);
   const rafId = useRef<number>(0);
   const pendingFlush = useRef(false);
+  const domStale = useRef(false);
   const maxLinesRef = useRef(shellMaxLines);
   maxLinesRef.current = shellMaxLines;
 
@@ -108,6 +111,7 @@ export function ShellPanel() {
   /** Write the current device's HTML (or placeholder) directly to the output DOM element. */
   const flushToDOM = useCallback(() => {
     if (!outputRef.current) return;
+    domStale.current = false;
     const deviceId = selectedDeviceIdRef.current;
     const dev = selectedDeviceRef.current;
     if (!deviceId) {
@@ -132,16 +136,65 @@ export function ShellPanel() {
         : (dev ? `Connected to ${dev.name}\nType a command below.\n` : "");
     }
 
-    outputRef.current.scrollTop = outputRef.current.scrollHeight;
+    if (autoScrollRef.current) {
+      outputRef.current.scrollTop = outputRef.current.scrollHeight;
+    }
   }, []);
 
   const scheduleFlush = useCallback(() => {
+    if (!autoScrollRef.current) {
+      domStale.current = true;
+      return;
+    }
     if (pendingFlush.current) return;
     pendingFlush.current = true;
     rafId.current = requestAnimationFrame(() => {
       pendingFlush.current = false;
       flushToDOM();
     });
+  }, [flushToDOM]);
+
+  const handleWheel = useCallback((e: React.WheelEvent) => {
+    if (e.deltaY < 0) {
+      autoScrollRef.current = false;
+      setAutoScroll(false);
+    }
+  }, []);
+
+  const handleScroll = useCallback(() => {
+    const el = outputRef.current;
+    if (!el) return;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 30;
+    if (atBottom) {
+      if (!autoScrollRef.current) {
+        autoScrollRef.current = true;
+        setAutoScroll(true);
+        if (domStale.current) {
+          if (!pendingFlush.current) {
+            pendingFlush.current = true;
+            cancelAnimationFrame(rafId.current);
+            rafId.current = requestAnimationFrame(() => {
+              pendingFlush.current = false;
+              flushToDOM();
+            });
+          }
+        }
+      }
+    } else if (autoScrollRef.current) {
+      autoScrollRef.current = false;
+      setAutoScroll(false);
+    }
+  }, [flushToDOM]);
+
+  const scrollToBottom = useCallback(() => {
+    autoScrollRef.current = true;
+    setAutoScroll(true);
+    if (domStale.current) {
+      flushToDOM();
+    }
+    if (outputRef.current) {
+      outputRef.current.scrollTop = outputRef.current.scrollHeight;
+    }
   }, [flushToDOM]);
 
   useEffect(() => {
@@ -162,6 +215,8 @@ export function ShellPanel() {
       setLogToFile(!!logFileMap.current[selectedDeviceId]);
       setAnsiColor(ansiColorMap.current[selectedDeviceId] ?? true);
     }
+    autoScrollRef.current = true;
+    setAutoScroll(true);
     flushToDOM();
   }, [selectedDeviceId, rebuildHtmlForDevice, flushToDOM]);
 
@@ -549,11 +604,24 @@ export function ShellPanel() {
                 onClick={handleClear}
               />
             </Tooltip>
+            {!autoScroll && (
+              <Tooltip title="Scroll to bottom">
+                <Button
+                  size="small"
+                  type="text"
+                  icon={<VerticalAlignBottomOutlined style={{ color: "var(--term-text)", opacity: 0.6 }} />}
+                  onClick={scrollToBottom}
+                />
+              </Tooltip>
+            )}
           </div>
 
           {/* Output area — content managed directly via ref, no React state */}
           <div
             ref={outputRef}
+            className="term-output"
+            onWheel={handleWheel}
+            onScroll={handleScroll}
             style={{
               flex: 1,
               overflow: "auto",

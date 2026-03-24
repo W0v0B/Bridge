@@ -190,22 +190,27 @@ export function HilogPanel() {
     const el = scrollRef.current;
     if (!el) return;
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 30;
-    if (atBottom && !autoScrollRef.current) {
-      autoScrollRef.current = true;
-      setAutoScroll(true);
-      if (domStale.current) {
-        // Defer the rebuild to the next animation frame — never do heavy DOM work
-        // synchronously inside a scroll handler (scroll anchoring can trigger this
-        // mid-streaming, causing a UI freeze that looks like a crash).
-        if (!pendingFlush.current) {
-          pendingFlush.current = true;
-          cancelAnimationFrame(rafId.current);
-          rafId.current = requestAnimationFrame(() => {
-            pendingFlush.current = false;
-            rebuildAndFlush();
-          });
+    if (atBottom) {
+      if (!autoScrollRef.current) {
+        autoScrollRef.current = true;
+        setAutoScroll(true);
+        if (domStale.current) {
+          // Defer the rebuild to the next animation frame — never do heavy DOM work
+          // synchronously inside a scroll handler (scroll anchoring can trigger this
+          // mid-streaming, causing a UI freeze that looks like a crash).
+          if (!pendingFlush.current) {
+            pendingFlush.current = true;
+            cancelAnimationFrame(rafId.current);
+            rafId.current = requestAnimationFrame(() => {
+              pendingFlush.current = false;
+              rebuildAndFlush();
+            });
+          }
         }
       }
+    } else if (autoScrollRef.current) {
+      autoScrollRef.current = false;
+      setAutoScroll(false);
     }
   }, [rebuildAndFlush]);
 

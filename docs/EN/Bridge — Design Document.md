@@ -722,6 +722,7 @@ Shown when no device is selected. Vertically and horizontally centred within the
 │  01-15 10:23:45.456  1234  5678 I Tag:…  │  │ AT+GMR                 │  │
 │  01-15 10:23:45.789  1234  5678 W Tag:…  │  └────────────────────────┘  │
 │  (streaming output...)                   │                              │
+│              [↓ Bottom]  (when paused)   │                              │
 │                                          │  ┌────────────────────────┐  │
 │  ┌─ Settings (collapsible) ──────────┐   │  │ Label: [____________]  │  │
 │  │ Max lines [5000▾]  0=unlimited    │   │  │ Cmd:   [____________]  │  │
@@ -745,6 +746,7 @@ Shown when no device is selected. Vertically and horizontally centred within the
 - **Log to file** (file-add icon, turns red when active): opens a save dialog and begins continuously appending all incoming data to the chosen file. The toggle is **per-device** and independent — logging on device A continues uninterrupted while device B is selected. Stops only when toggled off or the device is disconnected.
 - **Settings toggle** (gear icon): reveals an inline `Max lines` setting (default 5000, range 0–100000, 0 = unlimited). The output buffer is trimmed to this limit to prevent DOM lag from unbounded log accumulation.
 - **Clear button** (trash icon): clears the current device's output buffer immediately.
+- **Scroll to bottom button** (↓ icon): appears when auto-scroll is paused; click to flush the latest buffered output and resume auto-scrolling.
 
 **Per-device output management** (`ShellPanel`):
 - `outputMap`, `inputMap`, `runningMap`, and `logFileMap` are all `useRef<Record<string, …>>` maps keyed by device ID, accumulating state for **all** connected devices simultaneously.
@@ -757,6 +759,7 @@ Shown when no device is selected. Vertically and horizontally centred within the
 - Per-device HTML state is held in `htmlStringMap`/`htmlChunksMap` refs and written directly to the output `<div>` via `innerHTML`, bypassing React state entirely for output rendering.
 - ANSI escape sequences are parsed incrementally by a per-device `AnsiConverter` instance that preserves SGR color state across chunks, avoiding O(n) re-parsing of the full buffer on each write.
 - Non-selected devices never touch the DOM; data accumulates silently until that device is selected.
+- **Auto-scroll pause**: scrolling up via mouse wheel or scrollbar drag pauses auto-scroll and suspends DOM updates entirely — data continues accumulating in `htmlStringMap` up to the configured line limit. Resuming (scrolling to bottom or clicking ↓ Bottom) triggers a single `flushToDOM` to catch up. Switching devices resets auto-scroll to on.
 
 ### 6.3 Logcat Tab Layout
 
