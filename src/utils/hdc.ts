@@ -1,6 +1,26 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { OhosDevice, HilogEntry, HilogFilter, BundleInfo, HdcScreenMirrorConfig } from "../types/hdc";
 import type { FileEntry } from "../types/adb";
+import {
+  KEYCODE_HOME, KEYCODE_BACK,
+  KEYCODE_DPAD_UP, KEYCODE_DPAD_DOWN, KEYCODE_DPAD_LEFT, KEYCODE_DPAD_RIGHT, KEYCODE_DPAD_CENTER,
+  KEYCODE_VOLUME_UP, KEYCODE_VOLUME_DOWN, KEYCODE_POWER, KEYCODE_MENU,
+} from "../components/shared/RemoteControlPanel";
+
+/** Maps Android key codes to their OpenHarmony (@ohos.multimodalInput.keyCode) equivalents. */
+export const OHOS_KEYCODE_MAP: Record<number, number> = {
+  [KEYCODE_HOME]: 1,
+  [KEYCODE_BACK]: 2,
+  [KEYCODE_DPAD_UP]: 2012,
+  [KEYCODE_DPAD_DOWN]: 2013,
+  [KEYCODE_DPAD_LEFT]: 2014,
+  [KEYCODE_DPAD_RIGHT]: 2015,
+  [KEYCODE_DPAD_CENTER]: 2016,
+  [KEYCODE_VOLUME_UP]: 16,
+  [KEYCODE_VOLUME_DOWN]: 17,
+  [KEYCODE_POWER]: 18,
+  [KEYCODE_MENU]: 2067,
+};
 
 export async function getOhosDevices() {
   return invoke<OhosDevice[]>("get_ohos_devices");

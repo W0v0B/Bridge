@@ -7,7 +7,7 @@ import {
 } from "@ant-design/icons";
 import { useDeviceStore } from "../../store/deviceStore";
 import { useHdcScreenMirrorState, useHdcScreenFrame } from "../../hooks/useHdcEvents";
-import { startHdcScreenMirror, stopHdcScreenMirror, runHdcShellCommand } from "../../utils/hdc";
+import { startHdcScreenMirror, stopHdcScreenMirror, runHdcShellCommand, OHOS_KEYCODE_MAP } from "../../utils/hdc";
 import { RemoteControlPanel } from "../shared/RemoteControlPanel";
 
 const { Text } = Typography;
@@ -107,7 +107,8 @@ export function HdcScreenMirrorPanel() {
   const sendKey = useCallback(async (keyCode: number) => {
     if (!connectKey) return;
     try {
-      await runHdcShellCommand(connectKey, `input keyevent ${keyCode}`);
+      const ohosCode = OHOS_KEYCODE_MAP[keyCode] ?? keyCode;
+      await runHdcShellCommand(connectKey, `uinput -K -d ${ohosCode} -u ${ohosCode}`);
     } catch (err: unknown) {
       message.error(String(err));
     }

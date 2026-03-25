@@ -26,6 +26,7 @@ export const KEYCODE_VOLUME_DOWN = 25;
 export const KEYCODE_POWER = 26;
 export const KEYCODE_MENU = 82;
 
+
 interface RemoteControlPanelProps {
   disabled: boolean;
   onSendKey: (keyCode: number) => Promise<void>;
