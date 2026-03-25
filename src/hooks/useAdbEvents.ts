@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useDeviceStore } from "../store/deviceStore";
-import { getDevices } from "../utils/adb";
-import type { AdbDevice, TransferProgress, LogcatBatch, ScrcpyState } from "../types/adb";
+import { getDevices, isAdbScreenCaptureRunning } from "../utils/adb";
+import type { AdbDevice, TransferProgress, LogcatBatch, ScrcpyState, AdbScreenFrame, AdbScreenCaptureState } from "../types/adb";
 
 export function useDeviceEvents() {
   const syncAdbDevices = useDeviceStore((s) => s.syncAdbDevices);
@@ -100,4 +100,53 @@ export function useScrcpyState(serial: string | null) {
   );
 
   return { running, setRunningOptimistic };
+}
+
+export function useAdbScreenCaptureState(serial: string | null) {
+  const [running, setRunning] = useState(false);
+
+  useEffect(() => {
+    if (!serial) {
+      setRunning(false);
+      return;
+    }
+
+    isAdbScreenCaptureRunning(serial)
+      .then(setRunning)
+      .catch(() => {});
+
+    const unlisten = listen<AdbScreenCaptureState>("adb_screen_state", (event) => {
+      if (event.payload.serial === serial) {
+        setRunning(event.payload.running);
+      }
+    });
+
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, [serial]);
+
+  return { running };
+}
+
+export function useAdbScreenFrame(
+  serial: string | null,
+  onFrame: (data: string) => void
+) {
+  const callbackRef = useRef(onFrame);
+  callbackRef.current = onFrame;
+
+  useEffect(() => {
+    if (!serial) return;
+
+    const unlisten = listen<AdbScreenFrame>("adb_screen_frame", (event) => {
+      if (event.payload.serial === serial) {
+        callbackRef.current(event.payload.data);
+      }
+    });
+
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, [serial]);
 }

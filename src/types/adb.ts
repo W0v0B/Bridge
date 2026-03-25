@@ -71,6 +71,16 @@ export interface ScrcpyState {
   running: boolean;
 }
 
+export interface AdbScreenFrame {
+  serial: string;
+  data: string; // base64 PNG
+}
+
+export interface AdbScreenCaptureState {
+  serial: string;
+  running: boolean;
+}
+
 export interface PackageInfo {
   package_name: string;
   apk_path: string;

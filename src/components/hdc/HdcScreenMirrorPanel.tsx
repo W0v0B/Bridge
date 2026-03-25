@@ -167,7 +167,8 @@ export function HdcScreenMirrorPanel() {
             step={null}
             marks={INTERVAL_MARKS}
             value={intervalMs}
-            onChange={(v) => { setIntervalMs(v); saveIntervalMs(v); }}
+            onChange={setIntervalMs}
+            onChangeComplete={saveIntervalMs}
             disabled={running}
             tooltip={{ formatter: (v) => `${v}ms` }}
           />

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   App,
   Button,
@@ -7,6 +7,8 @@ import {
   Input,
   Select,
   Collapse,
+  Segmented,
+  Slider,
   Tag,
   Space,
   Tooltip,
@@ -20,12 +22,29 @@ import {
 } from "@ant-design/icons";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useDeviceStore } from "../../store/deviceStore";
-import { useScrcpyState } from "../../hooks/useAdbEvents";
-import { startScrcpy, stopScrcpy, isScrcpyRunning, runShellCommand } from "../../utils/adb";
+import { useScrcpyState, useAdbScreenCaptureState, useAdbScreenFrame } from "../../hooks/useAdbEvents";
+import {
+  startScrcpy,
+  stopScrcpy,
+  isScrcpyRunning,
+  runShellCommand,
+  startAdbScreenCapture,
+  stopAdbScreenCapture,
+} from "../../utils/adb";
 import { RemoteControlPanel } from "../shared/RemoteControlPanel";
 import type { ScrcpyConfig } from "../../types/adb";
 
 const { Text } = Typography;
+
+type MirrorMode = "scrcpy" | "screenshot";
+
+const INTERVAL_MARKS: Record<number, string> = {
+  333: "3fps",
+  500: "2fps",
+  1000: "1fps",
+  2000: "0.5fps",
+  5000: "0.2fps",
+};
 
 const DEFAULT_CONFIG: ScrcpyConfig = {
   maxSize: 1024,
@@ -57,6 +76,22 @@ function saveConfig(config: ScrcpyConfig) {
   localStorage.setItem("scrcpy_config", JSON.stringify(config));
 }
 
+function loadMode(): MirrorMode {
+  const raw = localStorage.getItem("screen_mirror_mode");
+  return raw === "screenshot" ? "screenshot" : "scrcpy";
+}
+
+function loadIntervalMs(): number {
+  try {
+    const raw = localStorage.getItem("adb_screen_config");
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (typeof parsed.intervalMs === "number") return parsed.intervalMs;
+    }
+  } catch { /* ignore */ }
+  return 500;
+}
+
 export function ScreenMirrorPanel() {
   const { message } = App.useApp();
 
@@ -65,13 +100,26 @@ export function ScreenMirrorPanel() {
   const deviceObj = allDevices.find((d) => d.id === selectedDeviceId && d.type === "adb") ?? null;
   const serial = deviceObj?.serial ?? null;
 
-  const { running, setRunningOptimistic } = useScrcpyState(serial);
-  const [starting, setStarting] = useState(false);
+  const [mode, setMode] = useState<MirrorMode>(loadMode);
+
+  // Scrcpy state
+  const { running: scrcpyRunning, setRunningOptimistic } = useScrcpyState(serial);
+  const [scrcpyStarting, setScrcpyStarting] = useState(false);
   const [config, setConfig] = useState<ScrcpyConfig>(loadConfig);
   const [configVisible, setConfigVisible] = useState(true);
   const [record, setRecord] = useState(false);
 
-  // Sync running state from backend on serial change
+  // Screenshot state
+  const { running: captureRunning } = useAdbScreenCaptureState(serial);
+  const [captureStarting, setCaptureStarting] = useState(false);
+  const [intervalMs, setIntervalMs] = useState(loadIntervalMs);
+  const [imgSrc, setImgSrc] = useState<string | null>(null);
+  const [fps, setFps] = useState(0);
+  const fpsCounterRef = useRef(0);
+
+  const anyRunning = scrcpyRunning || captureRunning;
+
+  // Sync scrcpy running state from backend on serial change
   useEffect(() => {
     if (!serial) return;
     isScrcpyRunning(serial).then((r) => {
@@ -79,10 +127,49 @@ export function ScreenMirrorPanel() {
     }).catch(() => {});
   }, [serial, setRunningOptimistic]);
 
-  // Reset starting flag when running state changes
+  // Reset starting flags when running state changes
   useEffect(() => {
-    if (running) setStarting(false);
-  }, [running]);
+    if (scrcpyRunning) setScrcpyStarting(false);
+  }, [scrcpyRunning]);
+
+  useEffect(() => {
+    if (captureRunning) setCaptureStarting(false);
+  }, [captureRunning]);
+
+  // Clear capture image when stopped or device/mode changes
+  useEffect(() => {
+    if (!captureRunning) setImgSrc(null);
+  }, [captureRunning, serial]);
+
+  // FPS counter for screenshot mode
+  useEffect(() => {
+    if (!captureRunning) {
+      setFps(0);
+      fpsCounterRef.current = 0;
+      return;
+    }
+    const interval = setInterval(() => {
+      setFps(fpsCounterRef.current);
+      fpsCounterRef.current = 0;
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [captureRunning]);
+
+  useAdbScreenFrame(
+    serial,
+    useCallback((data: string) => {
+      setImgSrc(`data:image/png;base64,${data}`);
+      fpsCounterRef.current += 1;
+    }, [])
+  );
+
+  const handleModeChange = useCallback((val: string | number) => {
+    if (val !== "scrcpy" && val !== "screenshot") return;
+    setMode(val);
+    localStorage.setItem("screen_mirror_mode", val);
+  }, []);
+
+  // ── Scrcpy handlers ──
 
   const updateConfig = useCallback((partial: Partial<ScrcpyConfig>) => {
     setConfig((prev) => {
@@ -92,20 +179,20 @@ export function ScreenMirrorPanel() {
     });
   }, []);
 
-  const handleStart = useCallback(async () => {
+  const handleScrcpyStart = useCallback(async () => {
     if (!serial) return;
-    setStarting(true);
+    setScrcpyStarting(true);
     try {
       const cfg = { ...config };
       if (!record) cfg.recordPath = "";
       await startScrcpy(serial, cfg);
     } catch (err: unknown) {
-      setStarting(false);
+      setScrcpyStarting(false);
       message.error(String(err));
     }
   }, [serial, config, record, message]);
 
-  const handleStop = useCallback(async () => {
+  const handleScrcpyStop = useCallback(async () => {
     if (!serial) return;
     try {
       await stopScrcpy(serial);
@@ -123,6 +210,30 @@ export function ScreenMirrorPanel() {
       updateConfig({ recordPath: path as string });
     }
   }, [updateConfig]);
+
+  // ── Screenshot handlers ──
+
+  const handleCaptureStart = useCallback(async () => {
+    if (!serial) return;
+    setCaptureStarting(true);
+    try {
+      await startAdbScreenCapture(serial, { intervalMs });
+    } catch (err: unknown) {
+      setCaptureStarting(false);
+      message.error(String(err));
+    }
+  }, [serial, intervalMs, message]);
+
+  const handleCaptureStop = useCallback(async () => {
+    if (!serial) return;
+    try {
+      await stopAdbScreenCapture(serial);
+    } catch (err: unknown) {
+      message.error(String(err));
+    }
+  }, [serial, message]);
+
+  // ── Shared ──
 
   const sendKey = useCallback(async (keyCode: number) => {
     if (!serial) return;
@@ -145,6 +256,8 @@ export function ScreenMirrorPanel() {
       </div>
     );
   }
+
+  // ── Scrcpy settings ──
 
   const orientationOptions = [
     { label: "Auto", value: "" },
@@ -315,60 +428,120 @@ export function ScreenMirrorPanel() {
     },
   ];
 
+  // ── Render ──
+
+  const captureStatusLabel = captureRunning
+    ? fps > 0
+      ? `Running • ${fps} FPS`
+      : "Running"
+    : captureStarting
+    ? "Starting..."
+    : "Stopped";
+
   return (
     <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
       {/* Toolbar */}
       <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "0 0 12px 0", flexShrink: 0 }}>
-        {running ? (
-          <Button
-            type="primary"
-            danger
-            icon={<PauseCircleOutlined />}
-            onClick={handleStop}
-          >
-            Stop Mirror
-          </Button>
+        <Segmented
+          options={[
+            { label: "Scrcpy", value: "scrcpy" },
+            { label: "Screenshot", value: "screenshot" },
+          ]}
+          value={mode}
+          onChange={handleModeChange}
+          disabled={anyRunning}
+        />
+
+        {mode === "scrcpy" ? (
+          <>
+            {scrcpyRunning ? (
+              <Button type="primary" danger icon={<PauseCircleOutlined />} onClick={handleScrcpyStop}>
+                Stop Mirror
+              </Button>
+            ) : (
+              <Button type="primary" icon={<PlayCircleOutlined />} loading={scrcpyStarting} onClick={handleScrcpyStart}>
+                Start Mirror
+              </Button>
+            )}
+            <Tooltip title="Toggle settings panel">
+              <Button
+                icon={<SettingOutlined />}
+                type={configVisible ? "default" : "text"}
+                onClick={() => setConfigVisible((v) => !v)}
+              />
+            </Tooltip>
+            <Tag color={scrcpyRunning ? "green" : "default"}>
+              {scrcpyRunning ? "Running" : scrcpyStarting ? "Starting..." : "Stopped"}
+            </Tag>
+          </>
         ) : (
-          <Button
-            type="primary"
-            icon={<PlayCircleOutlined />}
-            loading={starting}
-            onClick={handleStart}
-          >
-            Start Mirror
-          </Button>
+          <>
+            {captureRunning ? (
+              <Button type="primary" danger icon={<PauseCircleOutlined />} onClick={handleCaptureStop}>
+                Stop Mirror
+              </Button>
+            ) : (
+              <Button type="primary" icon={<PlayCircleOutlined />} loading={captureStarting} onClick={handleCaptureStart}>
+                Start Mirror
+              </Button>
+            )}
+            <div style={{ flex: 1, maxWidth: 320, display: "flex", alignItems: "center", gap: 8 }}>
+              <Text type="secondary" style={{ flexShrink: 0, fontSize: 12 }}>Interval:</Text>
+              <Slider
+                style={{ flex: 1 }}
+                min={333}
+                max={5000}
+                step={null}
+                marks={INTERVAL_MARKS}
+                value={intervalMs}
+                onChange={setIntervalMs}
+                onChangeComplete={(v) => localStorage.setItem("adb_screen_config", JSON.stringify({ intervalMs: v }))}
+                disabled={captureRunning}
+                tooltip={{ formatter: (v) => `${v}ms` }}
+              />
+            </div>
+            <Tag color={captureRunning ? "green" : "default"}>{captureStatusLabel}</Tag>
+          </>
         )}
-        <Tooltip title="Toggle settings panel">
-          <Button
-            icon={<SettingOutlined />}
-            type={configVisible ? "default" : "text"}
-            onClick={() => setConfigVisible((v) => !v)}
-          />
-        </Tooltip>
-        <Tag color={running ? "green" : "default"}>
-          {running ? "Running" : starting ? "Starting..." : "Stopped"}
-        </Tag>
       </div>
 
-      {/* Settings + Remote side by side */}
+      {/* Content + Remote side by side */}
       <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "row", overflow: "hidden" }}>
-        {/* Settings / placeholder */}
-        <div style={{ flex: 1, minWidth: 0, overflow: "auto" }}>
-          {configVisible && (
-            <Collapse
-              items={collapseItems}
-              defaultActiveKey={["display"]}
-              size="small"
-              bordered={false}
-            />
-          )}
-          {!configVisible && (
-            <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 8 }}>
-              <DesktopOutlined style={{ fontSize: 48, opacity: 0.3 }} />
-              <Text type="secondary">Click "Start Mirror" to launch scrcpy</Text>
-            </div>
-          )}
-        </div>
+        {mode === "scrcpy" ? (
+          <div style={{ flex: 1, minWidth: 0, overflow: "auto" }}>
+            {configVisible && (
+              <Collapse
+                items={collapseItems}
+                defaultActiveKey={["display"]}
+                size="small"
+                bordered={false}
+              />
+            )}
+            {!configVisible && (
+              <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 8 }}>
+                <DesktopOutlined style={{ fontSize: 48, opacity: 0.3 }} />
+                <Text type="secondary">Click "Start Mirror" to launch scrcpy</Text>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
+            {imgSrc ? (
+              <img
+                src={imgSrc}
+                alt="Screen Mirror"
+                style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }}
+              />
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+                <DesktopOutlined style={{ fontSize: 48, opacity: 0.3 }} />
+                <Text type="secondary">
+                  {captureRunning ? "Waiting for first frame..." : "Click \"Start Mirror\" to begin"}
+                </Text>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Remote control panel */}
         <div style={{ display: "flex", alignItems: "center" }}>

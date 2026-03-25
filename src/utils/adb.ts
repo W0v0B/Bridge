@@ -127,3 +127,17 @@ export async function stopScrcpy(serial: string) {
 export async function isScrcpyRunning(serial: string) {
   return invoke<boolean>("is_scrcpy_running", { serial });
 }
+
+// ── ADB Screen Capture Commands ──
+
+export async function startAdbScreenCapture(serial: string, config: { intervalMs: number }) {
+  return invoke<void>("start_adb_screen_capture", { serial, config });
+}
+
+export async function stopAdbScreenCapture(serial: string) {
+  return invoke<void>("stop_adb_screen_capture", { serial });
+}
+
+export async function isAdbScreenCaptureRunning(serial: string) {
+  return invoke<boolean>("is_adb_screen_capture_running", { serial });
+}

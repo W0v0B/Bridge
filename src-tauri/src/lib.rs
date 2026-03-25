@@ -7,7 +7,7 @@ pub mod util;
 use base64::Engine as _;
 use tauri::Manager as _;
 
-use adb::{apps, commands, device, file, logcat, scrcpy};
+use adb::{apps, commands, device, file, logcat, screen as adb_screen, scrcpy};
 use hdc::{apps as hdc_apps, commands as hdc_commands, device as hdc_device, file as hdc_file, hilog, screen as hdc_screen};
 use serial::manager;
 use util as script_util;
@@ -49,6 +49,10 @@ pub fn run() {
             start_scrcpy,
             stop_scrcpy,
             is_scrcpy_running,
+            // ADB screen capture commands
+            start_adb_screen_capture,
+            stop_adb_screen_capture,
+            is_adb_screen_capture_running,
             // ADB logcat commands
             start_logcat,
             stop_logcat,
@@ -229,6 +233,27 @@ async fn stop_scrcpy(serial: String, app: tauri::AppHandle) -> Result<(), String
 #[tauri::command]
 fn is_scrcpy_running(serial: String) -> bool {
     scrcpy::is_running(&serial)
+}
+
+// ── ADB Screen Capture Commands ──
+
+#[tauri::command]
+async fn start_adb_screen_capture(
+    serial: String,
+    config: adb_screen::ScreenCaptureConfig,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    adb_screen::start(&serial, config, app).await
+}
+
+#[tauri::command]
+async fn stop_adb_screen_capture(serial: String) -> Result<(), String> {
+    adb_screen::stop(&serial).await
+}
+
+#[tauri::command]
+fn is_adb_screen_capture_running(serial: String) -> bool {
+    adb_screen::is_running(&serial)
 }
 
 // ── ADB Logcat Commands ──

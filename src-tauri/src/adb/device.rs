@@ -240,6 +240,7 @@ pub fn start_device_watcher(app: AppHandle) {
                             let app_clone = app.clone();
                             tokio::spawn(async move {
                                 let _ = super::scrcpy::stop(&serial, &app_clone).await;
+                                super::screen::kill_session(&serial).await;
                             });
                         }
                     }
