@@ -408,11 +408,15 @@ interface PackageInfo {
   - System + no root → "Disable" / "Disable {pkg} for current user? (no root — soft disable)"
 - **Loading feedback**: `message.loading(…, 0)` toast appears for both install and uninstall operations; transitions to success/error on completion. The Install APK button also shows an inline spinner while running.
 
-#### 4.1.6 Screen Mirror (scrcpy)
+#### 4.1.6 Screen Mirror (scrcpy + Screenshot fallback)
 
-Mirrors and controls the device screen by launching scrcpy as an external subprocess. Each device gets an independent scrcpy window. scrcpy is detected on PATH (not bundled) to keep the installer small.
+Mirrors and controls the device screen. A **mode toggle** (Scrcpy / Screenshot) lets the user choose between two backends:
+
+- **Scrcpy mode** (default): launches scrcpy as an external subprocess. Each device gets an independent scrcpy window. scrcpy is detected on PATH (not bundled) to keep the installer small.
+- **Screenshot mode**: captures PNG frames in-app via `adb exec-out screencap -p` (stdout), with a configurable interval. Works on any device, including those that don't support scrcpy.
 
 ```rust
+// ── Scrcpy backend (adb/scrcpy.rs) ──
 // Process-global PID map for scrcpy instances, keyed by device serial
 static SCRCPY_PROCESSES: Lazy<Mutex<HashMap<String, u32>>>
 
@@ -431,6 +435,25 @@ async fn stop_scrcpy(serial: String, app: AppHandle) -> Result<(), String>
 
 #[tauri::command]
 fn is_scrcpy_running(serial: String) -> bool
+
+// ── Screenshot backend (adb/screen.rs) ──
+// Process-global session map keyed by device serial
+static SCREEN_SESSIONS: Lazy<Mutex<HashMap<String, Arc<AtomicBool>>>>
+
+// start(): stops any existing session, inserts cancellation flag, spawns capture task
+// Capture loop per iteration:
+//   1. adb -s {serial} exec-out screencap -p  → PNG bytes directly on stdout (no temp file)
+//   2. Base64-encode stdout bytes → emit("adb_screen_frame", { serial, data })
+//   3. sleep(intervalMs)
+// Loop exits: cancelled flag set, or 5 consecutive failures
+// On exit: removes session entry, emits adb_screen_state { running: false }
+
+#[tauri::command]
+async fn start_adb_screen_capture(serial: String, config: ScreenCaptureConfig, app: AppHandle) -> Result<(), String>
+#[tauri::command]
+async fn stop_adb_screen_capture(serial: String) -> Result<(), String>
+#[tauri::command]
+fn is_adb_screen_capture_running(serial: String) -> bool
 ```
 
 ```typescript
@@ -451,11 +474,17 @@ interface ScrcpyConfig {
   keyboardMode?: string;   // --keyboard (uhid/sdk/aoa/disabled)
   mouseMode?: string;      // --mouse (uhid/sdk/aoa/disabled)
 }
+
+interface ScreenCaptureConfig { intervalMs: number } // 333–5000 ms, clamped in Rust
+
+// Screenshot mode events
+"adb_screen_frame" → { serial, data }  // base64 PNG per frame
+"adb_screen_state" → { serial, running }
 ```
 
-**Auto-cleanup**: The device watcher in `device.rs` detects when a device disappears from `adb devices` and automatically calls `scrcpy::stop()` for that serial. This handles unexpected disconnects (cable pull, reboot).
+**Auto-cleanup**: The device watcher in `device.rs` detects when a device disappears from `adb devices` and automatically calls `scrcpy::stop()` and `screen::kill_session()` for that serial.
 
-**Frontend** (`ScreenMirrorPanel.tsx`): Start/Stop button, collapsible settings panel (Display, Window, Device, Input, Recording sections), config persisted to `localStorage` key `"scrcpy_config"`. A **Remote Control Panel** (D-pad, Home/Back/Menu, Vol+/Vol−/Power) is rendered alongside the settings; each button sends `input keyevent <code>` via `runShellCommand`. The remote panel uses the shared `RemoteControlPanel` component (`src/components/shared/RemoteControlPanel.tsx`).
+**Frontend** (`ScreenMirrorPanel.tsx`): A **Segmented toggle** (Scrcpy / Screenshot) switches modes; disabled while either mode is running. In **Scrcpy mode**: Start/Stop button, collapsible settings (Display, Window, Device, Input, Recording), config persisted to `localStorage` key `"scrcpy_config"`. In **Screenshot mode**: Start/Stop button, capture interval slider (0.2–3 fps, persisted to `localStorage` key `"adb_screen_config"`), FPS counter, in-app PNG image display. A **Remote Control Panel** (D-pad, Home/Back/Menu, Vol+/Vol−/Power) is rendered alongside in both modes; each button sends `input keyevent <code>` via `runShellCommand`.
 
 ---
 
@@ -489,9 +518,11 @@ interface HdcScreenMirrorConfig { intervalMs: number } // 333–5000 ms, clamped
 "hdc_screen_state"  → HdcScreenMirrorState { connect_key, running }
 ```
 
-**Frontend** (`HdcScreenMirrorPanel.tsx`): Start/Stop button, FPS counter, capture interval slider (0.2–3 fps, persisted to `localStorage` key `"hdc_screen_config"`), in-app JPEG image display area. **Remote Control Panel** (shared `RemoteControlPanel` component) rendered alongside the image; keys sent via `runHdcShellCommand(connectKey, "input keyevent <code>")`.
+**Frontend** (`HdcScreenMirrorPanel.tsx`): Start/Stop button, FPS counter, capture interval slider (0.2–3 fps, persisted to `localStorage` key `"hdc_screen_config"`), in-app JPEG image display area. **Remote Control Panel** (shared `RemoteControlPanel` component) rendered alongside the image; keys sent via `runHdcShellCommand(connectKey, "uinput -K -d <ohosCode> -u <ohosCode>")`.
 
-**Shared component**: `src/components/shared/RemoteControlPanel.tsx` — reused by both ADB and OHOS screen mirror panels. Accepts `disabled: boolean` and `onSendKey: (keyCode: number) => Promise<void>` props.
+**Remote control keycodes**: OpenHarmony uses a different keycode numbering system (`@ohos.multimodalInput.keyCode`) and a different input command (`uinput`) from Android. `OHOS_KEYCODE_MAP` in `src/utils/hdc.ts` translates Android keycodes emitted by `RemoteControlPanel` to their OHOS equivalents before sending.
+
+**Shared component**: `src/components/shared/RemoteControlPanel.tsx` — reused by both ADB and OHOS screen mirror panels. Accepts `disabled: boolean` and `onSendKey: (keyCode: number) => Promise<void>` props. Exports Android keycode constants; OHOS-specific translation lives in `src/utils/hdc.ts`.
 
 ### 4.2 Serial Module
 

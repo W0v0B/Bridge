@@ -408,11 +408,15 @@ interface PackageInfo {
   - 系统应用 + 无 root → "禁用" / "为当前用户禁用 {pkg}？（无 root — 软禁用）"
 - **加载反馈**：安装和卸载操作均出现 `message.loading(…, 0)` 提示；完成后切换到成功/错误状态。Install APK 按钮在运行时也显示内联 spinner。
 
-#### 4.1.6 屏幕镜像（scrcpy）
+#### 4.1.6 屏幕镜像（scrcpy + 截图回退）
 
-通过将 scrcpy 作为外部子进程启动来镜像和控制设备屏幕。每台设备获得独立的 scrcpy 窗口。scrcpy 通过 PATH 检测（不内置捆绑），以减小安装包大小。
+镜像并控制设备屏幕。**模式切换**（Scrcpy / Screenshot）让用户选择两种后端之一：
+
+- **Scrcpy 模式**（默认）：将 scrcpy 作为外部子进程启动，每台设备获得独立的 scrcpy 窗口。scrcpy 通过 PATH 检测（不内置捆绑），以减小安装包大小。
+- **截图模式**：通过 `adb exec-out screencap -p`（stdout）在应用内捕获 PNG 帧，支持可配置的截图间隔。适用于任何设备，包括不支持 scrcpy 的设备。
 
 ```rust
+// ── Scrcpy 后端（adb/scrcpy.rs）──
 // Process-global PID map for scrcpy instances, keyed by device serial
 static SCRCPY_PROCESSES: Lazy<Mutex<HashMap<String, u32>>>
 
@@ -431,6 +435,25 @@ async fn stop_scrcpy(serial: String, app: AppHandle) -> Result<(), String>
 
 #[tauri::command]
 fn is_scrcpy_running(serial: String) -> bool
+
+// ── 截图后端（adb/screen.rs）──
+// Process-global session map keyed by device serial
+static SCREEN_SESSIONS: Lazy<Mutex<HashMap<String, Arc<AtomicBool>>>>
+
+// start(): 停止已有会话，插入取消标志，生成截图任务
+// 截图循环每次迭代：
+//   1. adb -s {serial} exec-out screencap -p  → PNG 字节直接写入 stdout（无临时文件）
+//   2. Base64 编码 stdout 字节 → emit("adb_screen_frame", { serial, data })
+//   3. sleep(intervalMs)
+// 退出条件：取消标志被设置，或连续 5 次失败
+// 退出时：移除会话条目，emit adb_screen_state { running: false }
+
+#[tauri::command]
+async fn start_adb_screen_capture(serial: String, config: ScreenCaptureConfig, app: AppHandle) -> Result<(), String>
+#[tauri::command]
+async fn stop_adb_screen_capture(serial: String) -> Result<(), String>
+#[tauri::command]
+fn is_adb_screen_capture_running(serial: String) -> bool
 ```
 
 ```typescript
@@ -451,11 +474,17 @@ interface ScrcpyConfig {
   keyboardMode?: string;   // --keyboard (uhid/sdk/aoa/disabled)
   mouseMode?: string;      // --mouse (uhid/sdk/aoa/disabled)
 }
+
+interface ScreenCaptureConfig { intervalMs: number } // 333–5000 ms，在 Rust 端截断
+
+// 截图模式事件
+"adb_screen_frame" → { serial, data }  // 每帧 base64 PNG
+"adb_screen_state" → { serial, running }
 ```
 
-**自动清理**：`device.rs` 中的设备监控器检测到设备从 `adb devices` 中消失时，会自动为该序列号调用 `scrcpy::stop()`。这处理了意外断连（拔线、重启）的情况。
+**自动清理**：`device.rs` 中的设备监控器检测到设备从 `adb devices` 中消失时，会自动为该序列号调用 `scrcpy::stop()` 和 `screen::kill_session()`。
 
-**前端**（`ScreenMirrorPanel.tsx`）：启动/停止按钮、可折叠设置面板（显示、窗口、设备、输入、录制各部分）、配置持久化到 `localStorage` 键 `"scrcpy_config"`。**远程控制面板**（方向键、Home/Back/Menu、音量+/音量-/电源）与设置并排渲染；每个按钮通过 `runShellCommand` 发送 `input keyevent <code>`。远程面板使用共享的 `RemoteControlPanel` 组件（`src/components/shared/RemoteControlPanel.tsx`）。
+**前端**（`ScreenMirrorPanel.tsx`）：**分段切换**（Scrcpy / Screenshot）切换模式，运行时禁用。**Scrcpy 模式**：启动/停止按钮、可折叠设置面板（显示、窗口、设备、输入、录制各部分），配置持久化到 `localStorage` 键 `"scrcpy_config"`。**截图模式**：启动/停止按钮、截图间隔滑块（0.2–3 fps，持久化到 `localStorage` 键 `"adb_screen_config"`）、帧率计数器、应用内 PNG 图像显示。两种模式下均提供**远程控制面板**（方向键、Home/Back/Menu、音量+/音量-/电源），每个按钮通过 `runShellCommand` 发送 `input keyevent <code>`。
 
 ---
 
@@ -489,9 +518,11 @@ interface HdcScreenMirrorConfig { intervalMs: number } // 333–5000 ms, clamped
 "hdc_screen_state"  → HdcScreenMirrorState { connect_key, running }
 ```
 
-**前端**（`HdcScreenMirrorPanel.tsx`）：启动/停止按钮、帧率计数器、截图间隔滑块（0.2–3 fps，持久化到 `localStorage` 键 `"hdc_screen_config"`）、应用内 JPEG 图像显示区域。**远程控制面板**（共享 `RemoteControlPanel` 组件）与图像并排渲染；按键通过 `runHdcShellCommand(connectKey, "input keyevent <code>")` 发送。
+**前端**（`HdcScreenMirrorPanel.tsx`）：启动/停止按钮、帧率计数器、截图间隔滑块（0.2–3 fps，持久化到 `localStorage` 键 `"hdc_screen_config"`）、应用内 JPEG 图像显示区域。**远程控制面板**（共享 `RemoteControlPanel` 组件）与图像并排渲染。
 
-**共享组件**：`src/components/shared/RemoteControlPanel.tsx` — 被 ADB 和 OHOS 屏幕镜像面板复用。接受 `disabled: boolean` 和 `onSendKey: (keyCode: number) => Promise<void>` 属性。
+按键通过 `runHdcShellCommand(connectKey, "uinput -K -d <ohosCode> -u <ohosCode>")` 发送。OpenHarmony 使用 `uinput`（而非 Android 的 `input keyevent`），且键码体系不同（`@ohos.multimodalInput.keyCode`）。映射表 `OHOS_KEYCODE_MAP` 位于 `src/utils/hdc.ts`，在 `sendKey` 回调中将 Android 键码转换为 OHOS 键码后再发送命令。
+
+**共享组件**：`src/components/shared/RemoteControlPanel.tsx` — 被 ADB 和 OHOS 屏幕镜像面板复用。接受 `disabled: boolean` 和 `onSendKey: (keyCode: number) => Promise<void>` 属性。该组件始终使用 Android 键码常量（设备无关）；各消费方的 `sendKey` 回调负责将键码翻译为目标平台所需格式。
 
 ### 4.2 串口模块
 
