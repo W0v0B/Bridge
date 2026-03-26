@@ -520,7 +520,7 @@ interface HdcScreenMirrorConfig { intervalMs: number } // 333–5000 ms, clamped
 
 **Frontend** (`HdcScreenMirrorPanel.tsx`): Start/Stop button, FPS counter, capture interval slider (0.2–3 fps, persisted to `localStorage` key `"hdc_screen_config"`), in-app JPEG image display area. **Remote Control Panel** (shared `RemoteControlPanel` component) rendered alongside the image; keys sent via `runHdcShellCommand(connectKey, "uinput -K -d <ohosCode> -u <ohosCode>")`.
 
-**Remote control keycodes**: OpenHarmony uses a different keycode numbering system (`@ohos.multimodalInput.keyCode`) and a different input command (`uinput`) from Android. `OHOS_KEYCODE_MAP` in `src/utils/hdc.ts` translates Android keycodes emitted by `RemoteControlPanel` to their OHOS equivalents before sending.
+**Remote control keycodes**: OpenHarmony uses a different keycode numbering system (`@ohos.multimodalInput.keyCode`) and a different input command (`uinput`) from Android. `OHOS_KEYCODE_MAP` in `src/utils/hdc.ts` translates Android keycodes emitted by `RemoteControlPanel` to their OHOS equivalents before sending. Note: the OK button maps to `KEYCODE_ENTER (2054)` rather than `KEYCODE_DPAD_CENTER (2016)`, as 2016 is unresponsive on most devices.
 
 **Shared component**: `src/components/shared/RemoteControlPanel.tsx` — reused by both ADB and OHOS screen mirror panels. Accepts `disabled: boolean` and `onSendKey: (keyCode: number) => Promise<void>` props. Exports Android keycode constants; OHOS-specific translation lives in `src/utils/hdc.ts`.
 
@@ -571,18 +571,31 @@ struct SerialDataEvent {
 Quick commands are managed entirely on the frontend via Zustand store (`commandStore.ts`) and shared between ADB and serial devices. The panel appears as a resizable right pane inside the Shell tab.
 
 ```typescript
+interface CommandGroup {
+  id: string;
+  label: string;
+  collapsed: boolean;   // persisted collapse state
+  sortOrder: number;    // display order; recomputed on group deletion
+}
+
 interface QuickCommand {
-  id: string;            // uuid
-  label: string;         // Display label, e.g. "Reset"
-  command: string;       // Payload to send, e.g. "AT+RST"
+  id: string;
+  label: string;
+  command: string;
   sequenceOrder?: number; // undefined = excluded from sequence; 1,2,3… = run order
+  scriptPath?: string;    // if set, a local script is executed instead of command
+  groupId?: string;       // undefined = ungrouped (root level)
 }
 ```
+
+Commands are organised into **groups** (folders), displayed as a VS Code-style collapsible directory tree. Ungrouped commands appear at the top; groups follow in `sortOrder` order. Each group header shows the command count, supports collapse/expand, inline double-click rename, a `+` button to pre-select the group in the add form, and a `⋯` menu (Rename / Delete Group). Deleting a group moves its commands to ungrouped. Group collapse state is persisted to localStorage via Zustand `persist` (key `"bridge-commands"`, version `2`).
+
+Each command row has a `⋯` dropdown with a **Move to** submenu listing all groups and "Ungrouped", allowing commands to be reassigned at any time.
 
 - **ADB devices**: quick command runs via `startShellStream()` — output streams in real-time via `shell_output` events; sets the shell running state so the Stop button appears
 - **Serial devices**: quick command sends via `writeToPort(command + "\r\n")` — response arrives asynchronously via `serial_data` events
 
-**Sequence Runner** — a Sequence Runner section below the command list allows looping through commands that have a `sequenceOrder` set:
+**Sequence Runner** — a Sequence Runner section below the command list allows looping through commands that have a `sequenceOrder` set (grouping is ignored by the runner — it operates on the full flat command list):
 - Each device has **independent** sequence state stored in a per-device ref map in `QuickCommandsPanel`
 - The device targeted by the sequence is captured at start time, so switching the UI to another device does not interrupt the runner
 - A configurable interval (default 2 s, min 0.5 s) separates successive commands

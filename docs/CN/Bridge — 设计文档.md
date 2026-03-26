@@ -520,7 +520,7 @@ interface HdcScreenMirrorConfig { intervalMs: number } // 333–5000 ms, clamped
 
 **前端**（`HdcScreenMirrorPanel.tsx`）：启动/停止按钮、帧率计数器、截图间隔滑块（0.2–3 fps，持久化到 `localStorage` 键 `"hdc_screen_config"`）、应用内 JPEG 图像显示区域。**远程控制面板**（共享 `RemoteControlPanel` 组件）与图像并排渲染。
 
-按键通过 `runHdcShellCommand(connectKey, "uinput -K -d <ohosCode> -u <ohosCode>")` 发送。OpenHarmony 使用 `uinput`（而非 Android 的 `input keyevent`），且键码体系不同（`@ohos.multimodalInput.keyCode`）。映射表 `OHOS_KEYCODE_MAP` 位于 `src/utils/hdc.ts`，在 `sendKey` 回调中将 Android 键码转换为 OHOS 键码后再发送命令。
+按键通过 `runHdcShellCommand(connectKey, "uinput -K -d <ohosCode> -u <ohosCode>")` 发送。OpenHarmony 使用 `uinput`（而非 Android 的 `input keyevent`），且键码体系不同（`@ohos.multimodalInput.keyCode`）。映射表 `OHOS_KEYCODE_MAP` 位于 `src/utils/hdc.ts`，在 `sendKey` 回调中将 Android 键码转换为 OHOS 键码后再发送命令。注意：OK 按钮映射为 `KEYCODE_ENTER (2054)` 而非 `KEYCODE_DPAD_CENTER (2016)`，因为 2016 在大多数设备上无响应。
 
 **共享组件**：`src/components/shared/RemoteControlPanel.tsx` — 被 ADB 和 OHOS 屏幕镜像面板复用。接受 `disabled: boolean` 和 `onSendKey: (keyCode: number) => Promise<void>` 属性。该组件始终使用 Android 键码常量（设备无关）；各消费方的 `sendKey` 回调负责将键码翻译为目标平台所需格式。
 
@@ -571,18 +571,31 @@ struct SerialDataEvent {
 快捷命令完全由前端通过 Zustand store（`commandStore.ts`）管理，在 ADB 和串口设备之间共享。该面板作为可调整大小的右侧面板出现在 Shell 标签页内。
 
 ```typescript
+interface CommandGroup {
+  id: string;
+  label: string;
+  collapsed: boolean;   // 持久化的折叠状态
+  sortOrder: number;    // 显示顺序；删除分组后重新计算
+}
+
 interface QuickCommand {
-  id: string;            // uuid
-  label: string;         // Display label, e.g. "Reset"
-  command: string;       // Payload to send, e.g. "AT+RST"
-  sequenceOrder?: number; // undefined = excluded from sequence; 1,2,3… = run order
+  id: string;
+  label: string;
+  command: string;
+  sequenceOrder?: number; // undefined = 不参与序列；1,2,3… = 执行顺序
+  scriptPath?: string;    // 若设置，则执行本地脚本而非 command 字段
+  groupId?: string;       // undefined = 未分组（根层级）
 }
 ```
+
+命令以**分组**（文件夹）形式组织，以类似 VS Code 的可折叠目录树展示。未分组命令显示在顶部，分组按 `sortOrder` 顺序排列。每个分组头显示命令数量，支持折叠/展开、双击内联重命名、`+` 按钮（在添加表单中预选该分组）以及 `⋯` 菜单（重命名 / 删除分组）。删除分组会将其中的命令移至未分组。分组折叠状态通过 Zustand `persist` 持久化到 localStorage（键名 `"bridge-commands"`，版本 `2`）。
+
+每个命令行的 `⋯` 下拉菜单中包含**移动到**子菜单，列出所有分组和"未分组"选项，允许随时重新分配命令所属分组。
 
 - **ADB 设备**：快捷命令通过 `startShellStream()` 执行——输出通过 `shell_output` 事件实时流式传输；设置 shell 运行状态以显示 Stop 按钮
 - **串口设备**：快捷命令通过 `writeToPort(command + "\r\n")` 发送——响应通过 `serial_data` 事件异步到达
 
-**序列执行器** — 命令列表下方的序列执行器区块允许循环执行设置了 `sequenceOrder` 的命令：
+**序列执行器** — 命令列表下方的序列执行器区块允许循环执行设置了 `sequenceOrder` 的命令（分组不影响序列执行——执行器在完整的扁平命令列表上操作）：
 - 每台设备有**独立**的序列状态，存储在 `QuickCommandsPanel` 中逐设备的 ref 映射中
 - 序列针对的设备在启动时捕获，因此将 UI 切换到另一台设备不会中断执行器
 - 可配置间隔（默认 2 秒，最小 0.5 秒）分隔连续命令
