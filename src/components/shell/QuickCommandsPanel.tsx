@@ -1,10 +1,9 @@
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import {
-  App, Button, Input, InputNumber, Space, Typography, Tooltip, Divider, Tag,
+  App, Button, Input, InputNumber, Select, Space, Typography, Tooltip, Divider, Tag,
 } from "antd";
 import {
-  DeleteOutlined, SendOutlined, PlusOutlined,
-  PlayCircleOutlined, StopOutlined, FileOutlined,
+  PlusOutlined, PlayCircleOutlined, StopOutlined, FileOutlined, FolderAddOutlined,
 } from "@ant-design/icons";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useCommandStore, type DeviceType } from "../../store/commandStore";
@@ -13,6 +12,8 @@ import { startShellStream } from "../../utils/adb";
 import { startHdcShellStream } from "../../utils/hdc";
 import { writeToPort } from "../../utils/serial";
 import { runLocalScript } from "../../utils/script";
+import { CommandRow } from "./CommandRow";
+import { CommandGroupHeader } from "./CommandGroupHeader";
 
 const { Text } = Typography;
 
@@ -42,15 +43,22 @@ function getDeviceType(device: DeviceItem | undefined): DeviceType {
 export function QuickCommandsPanel({ onOutput, onStreamStart }: QuickCommandsPanelProps) {
   const { message } = App.useApp();
   const commandsByType = useCommandStore((s) => s.commandsByType);
+  const groupsByType = useCommandStore((s) => s.groupsByType);
   const addCommand = useCommandStore((s) => s.addCommand);
   const addScript = useCommandStore((s) => s.addScript);
   const removeCommand = useCommandStore((s) => s.removeCommand);
   const setSequenceOrder = useCommandStore((s) => s.setSequenceOrder);
+  const addGroup = useCommandStore((s) => s.addGroup);
+  const renameGroup = useCommandStore((s) => s.renameGroup);
+  const removeGroup = useCommandStore((s) => s.removeGroup);
+  const toggleGroupCollapsed = useCommandStore((s) => s.toggleGroupCollapsed);
+  const moveCommandToGroup = useCommandStore((s) => s.moveCommandToGroup);
   const selectedDeviceId = useDeviceStore((s) => s.selectedDeviceId);
   const devices = useDeviceStore((s) => s.devices);
 
   const [newLabel, setNewLabel] = useState("");
   const [newCommand, setNewCommand] = useState("");
+  const [newGroupId, setNewGroupId] = useState<string | undefined>(undefined);
 
   // Per-device sequence state (runs in background independent of selected device)
   const seqMap = useRef<Map<string, SeqEntry>>(new Map());
@@ -71,6 +79,7 @@ export function QuickCommandsPanel({ onOutput, onStreamStart }: QuickCommandsPan
   const selectedDevice = devices.find((d) => d.id === selectedDeviceId);
   const deviceType = getDeviceType(selectedDevice);
   const commands = commandsByType[deviceType] ?? [];
+  const groups = groupsByType[deviceType] ?? [];
 
   const getEntry = (deviceId: string): SeqEntry => {
     if (!seqMap.current.has(deviceId)) {
@@ -111,7 +120,6 @@ export function QuickCommandsPanel({ onOutput, onStreamStart }: QuickCommandsPan
     echoPrefix?: string,
   ) => {
     if (scriptPath) {
-      // Local script execution — use device.id as the correlation key
       onOutputRef.current?.(`${echoPrefix ?? ">"} [script] ${scriptPath}\n`, device.id);
       onStreamStartRef.current?.(device.id);
       await runLocalScript(device.id, scriptPath);
@@ -124,7 +132,6 @@ export function QuickCommandsPanel({ onOutput, onStreamStart }: QuickCommandsPan
       onStreamStartRef.current?.(device.id);
       await startHdcShellStream(device.serial, command);
     } else {
-      // serial
       onOutputRef.current?.(`${echoPrefix ?? ">"} ${command}\n`, device.id);
       await writeToPort(device.serial, command + "\r\n");
     }
@@ -150,7 +157,6 @@ export function QuickCommandsPanel({ onOutput, onStreamStart }: QuickCommandsPan
     entry.index++;
     entry.currentLabel = cmd.label;
 
-    // Update label in UI only if this device is currently visible
     if (deviceId === selectedDeviceIdRef.current) {
       setSeqCurrentLabel(cmd.label);
     }
@@ -221,7 +227,7 @@ export function QuickCommandsPanel({ onOutput, onStreamStart }: QuickCommandsPan
     const label = newLabel.trim();
     const cmd = newCommand.trim();
     if (!label || !cmd) return;
-    addCommand(deviceType, label, cmd);
+    addCommand(deviceType, label, cmd, newGroupId);
     setNewLabel("");
     setNewCommand("");
   };
@@ -233,13 +239,23 @@ export function QuickCommandsPanel({ onOutput, onStreamStart }: QuickCommandsPan
     });
     if (!selected) return;
     const path = typeof selected === "string" ? selected : selected;
-    // Use the filename (without extension) as the default label
     const filename = path.split(/[\\/]/).pop() ?? path;
     const label = filename.replace(/\.[^.]+$/, "");
-    addScript(deviceType, label, path);
+    addScript(deviceType, label, path, newGroupId);
+  };
+
+  const handleAddGroup = () => {
+    const id = addGroup(deviceType, "New Group");
+    setNewGroupId(id);
+  };
+
+  const handleAddToGroup = (groupId: string) => {
+    setNewGroupId(groupId);
   };
 
   const typeLabel = deviceType === "adb" ? "ADB" : deviceType === "ohos" ? "OHOS" : "Serial";
+  const ungroupedCommands = useMemo(() => commands.filter((c) => !c.groupId), [commands]);
+  const sortedGroups = useMemo(() => [...groups].sort((a, b) => a.sortOrder - b.sortOrder), [groups]);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", padding: 12 }}>
@@ -250,51 +266,63 @@ export function QuickCommandsPanel({ onOutput, onStreamStart }: QuickCommandsPan
         </Tag>
       </div>
 
-      {/* Command list */}
+      {/* Directory view */}
       <div style={{ flex: 1, overflow: "auto" }}>
-        {commands.map((cmd) => (
-          <div
+        {/* Ungrouped commands */}
+        {ungroupedCommands.map((cmd) => (
+          <CommandRow
             key={cmd.id}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 6,
-              padding: "6px 8px",
-              marginBottom: 4,
-              borderRadius: 6,
-              border: "1px solid var(--border)",
-              background: "var(--card-bg)",
-            }}
-          >
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                <Text strong style={{ fontSize: 13 }}>{cmd.label}</Text>
-                {cmd.scriptPath && (
-                  <Tag color="purple" style={{ fontSize: 10, lineHeight: "16px", padding: "0 4px" }}>
-                    script
-                  </Tag>
-                )}
-              </div>
-              <Text type="secondary" style={{ fontSize: 11, fontFamily: "monospace", display: "block" }} ellipsis>
-                {cmd.scriptPath ?? cmd.command}
-              </Text>
-            </div>
-            <Tooltip title="Sequence order (blank = skip)">
-              <InputNumber
-                size="small"
-                min={1}
-                value={cmd.sequenceOrder ?? null}
-                onChange={(v) => setSequenceOrder(deviceType, cmd.id, v ?? undefined)}
-                placeholder="#"
-                style={{ width: 44 }}
-              />
-            </Tooltip>
-            <Button size="small" type="primary" icon={<SendOutlined />}
-              onClick={() => handleSend(cmd.command, cmd.scriptPath)} />
-            <Button size="small" danger icon={<DeleteOutlined />}
-              onClick={() => removeCommand(deviceType, cmd.id)} />
-          </div>
+            cmd={cmd}
+            groups={groups}
+            onSend={handleSend}
+            onDelete={() => removeCommand(deviceType, cmd.id)}
+            onSetSequenceOrder={(order) => setSequenceOrder(deviceType, cmd.id, order)}
+            onMove={(gid) => moveCommandToGroup(deviceType, cmd.id, gid)}
+          />
         ))}
+
+        {/* Groups */}
+        {sortedGroups.map((group) => {
+          const groupCommands = commands.filter((c) => c.groupId === group.id);
+          return (
+            <div key={group.id}>
+              <CommandGroupHeader
+                group={group}
+                commandCount={groupCommands.length}
+                onToggleCollapse={() => toggleGroupCollapsed(deviceType, group.id)}
+                onRename={(label) => renameGroup(deviceType, group.id, label)}
+                onDelete={() => removeGroup(deviceType, group.id)}
+                onAddCommand={() => handleAddToGroup(group.id)}
+              />
+              {!group.collapsed && groupCommands.map((cmd) => (
+                <CommandRow
+                  key={cmd.id}
+                  cmd={cmd}
+                  groups={groups}
+                  indented
+                  onSend={handleSend}
+                  onDelete={() => removeCommand(deviceType, cmd.id)}
+                  onSetSequenceOrder={(order) => setSequenceOrder(deviceType, cmd.id, order)}
+                  onMove={(gid) => moveCommandToGroup(deviceType, cmd.id, gid)}
+                />
+              ))}
+            </div>
+          );
+        })}
+
+        {/* New Group button */}
+        <div style={{ marginTop: 6 }}>
+          <Tooltip title="Create a new group">
+            <Button
+              size="small"
+              icon={<FolderAddOutlined />}
+              onClick={handleAddGroup}
+              style={{ fontSize: 11, height: 24 }}
+            >
+              New Group
+            </Button>
+          </Tooltip>
+        </div>
       </div>
 
       {/* Sequence runner */}
@@ -343,6 +371,15 @@ export function QuickCommandsPanel({ onOutput, onStreamStart }: QuickCommandsPan
             onChange={(e) => setNewLabel(e.target.value)} />
           <Input size="small" placeholder="Command" value={newCommand}
             onChange={(e) => setNewCommand(e.target.value)} onPressEnter={handleAdd} />
+          <Select
+            size="small"
+            allowClear
+            placeholder="Group (optional)"
+            value={newGroupId}
+            onChange={(v) => setNewGroupId(v)}
+            style={{ width: "100%" }}
+            options={groups.map((g) => ({ value: g.id, label: g.label }))}
+          />
           <Space style={{ width: "100%" }} size={4}>
             <Button size="small" icon={<PlusOutlined />} onClick={handleAdd} style={{ flex: 1 }}>
               Add Command

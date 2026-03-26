@@ -15,7 +15,7 @@ export const OHOS_KEYCODE_MAP: Record<number, number> = {
   [KEYCODE_DPAD_DOWN]: 2013,
   [KEYCODE_DPAD_LEFT]: 2014,
   [KEYCODE_DPAD_RIGHT]: 2015,
-  [KEYCODE_DPAD_CENTER]: 2016,
+  [KEYCODE_DPAD_CENTER]: 2054,  // KEYCODE_ENTER — acts as OK/confirm; DPAD_CENTER (2016) is unresponsive on most devices
   [KEYCODE_VOLUME_UP]: 16,
   [KEYCODE_VOLUME_DOWN]: 17,
   [KEYCODE_POWER]: 18,
