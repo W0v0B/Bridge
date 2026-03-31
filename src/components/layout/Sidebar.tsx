@@ -16,6 +16,7 @@ import { useDeviceStore } from "../../store/deviceStore";
 import { disconnectDevice, getDevices } from "../../utils/adb";
 import { disconnectOhosDevice } from "../../utils/hdc";
 import { closePort } from "../../utils/serial";
+import { stopLocalScript } from "../../utils/script";
 import type { ConnectedDevice } from "../../types/device";
 
 const { Text } = Typography;
@@ -50,6 +51,7 @@ export function Sidebar({ onConnect, onRefresh, onSettings, collapsed, onCollaps
 
   const handleDisconnect = async (device: ConnectedDevice) => {
     setDisconnecting((prev) => new Set(prev).add(device.id));
+    stopLocalScript(device.id).catch(() => {});
     try {
       if (device.type === "adb") {
         await disconnectDevice(device.serial);

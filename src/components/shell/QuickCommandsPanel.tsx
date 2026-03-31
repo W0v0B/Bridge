@@ -11,7 +11,7 @@ import { useDeviceStore } from "../../store/deviceStore";
 import { startShellStream } from "../../utils/adb";
 import { startHdcShellStream } from "../../utils/hdc";
 import { writeToPort } from "../../utils/serial";
-import { runLocalScript } from "../../utils/script";
+import { runLocalScript, readScriptFile } from "../../utils/script";
 import { CommandRow } from "./CommandRow";
 import { CommandGroupHeader } from "./CommandGroupHeader";
 
@@ -120,9 +120,34 @@ export function QuickCommandsPanel({ onOutput, onStreamStart }: QuickCommandsPan
     echoPrefix?: string,
   ) => {
     if (scriptPath) {
-      onOutputRef.current?.(`${echoPrefix ?? ">"} [script] ${scriptPath}\n`, device.id);
-      onStreamStartRef.current?.(device.id);
-      await runLocalScript(device.id, scriptPath);
+      const isShell = scriptPath.match(/\.sh$/i);
+      if (isShell) {
+        let contents: string;
+        try {
+          contents = await readScriptFile(scriptPath);
+        } catch (e) {
+          onOutputRef.current?.(`> Error reading script: ${e}\n`, device.id);
+          return;
+        }
+        const lines = contents.split(/\r?\n/).filter((l) => l.trim().length > 0);
+        onOutputRef.current?.(`${echoPrefix ?? ">"} [sh] ${scriptPath}\n`, device.id);
+        onStreamStartRef.current?.(device.id);
+        for (const line of lines) {
+          if (device.type === "serial") {
+            onOutputRef.current?.(`> ${line}\n`, device.id);
+            await writeToPort(device.serial, line + "\r\n");
+          } else {
+            onOutputRef.current?.(`$ ${line}\n`, device.id);
+            if (device.type === "adb") await startShellStream(device.serial, line);
+            else await startHdcShellStream(device.serial, line);
+          }
+          await new Promise((r) => setTimeout(r, 200));
+        }
+      } else {
+        onOutputRef.current?.(`${echoPrefix ?? ">"} [script] ${scriptPath}\n`, device.id);
+        onStreamStartRef.current?.(device.id);
+        await runLocalScript(device.id, scriptPath);
+      }
     } else if (device.type === "adb") {
       onOutputRef.current?.(`${echoPrefix ?? "$"} ${command}\n`, device.id);
       onStreamStartRef.current?.(device.id);

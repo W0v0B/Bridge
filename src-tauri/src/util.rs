@@ -4,7 +4,7 @@ use std::sync::Mutex;
 use once_cell::sync::Lazy;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 
 /// Create a `Command` that won't spawn a visible console window on Windows.
@@ -24,8 +24,15 @@ pub fn cmd(program: impl AsRef<std::ffi::OsStr>) -> Command {
 
 // ── Local Script Execution ──
 
-/// Store PIDs of running script processes, keyed by "script:{id}"
+fn script_key(id: &str) -> String {
+    format!("script:{}", id)
+}
+
+/// Store PIDs of running script processes, keyed by `script_key(id)`
 static SCRIPT_PROCESSES: Lazy<Mutex<HashMap<String, u32>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+static SCRIPT_STDIN: Lazy<Mutex<HashMap<String, tokio::process::ChildStdin>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
 #[derive(Debug, Clone, Serialize)]
@@ -50,13 +57,17 @@ pub async fn run_script(
     script_path: &str,
     app: AppHandle,
 ) -> Result<(), String> {
-    let key = format!("script:{}", id);
+    let key = script_key(id);
 
     // Stop any existing script with the same id
     let old_pid = {
         let mut procs = SCRIPT_PROCESSES.lock().map_err(|e| e.to_string())?;
         procs.remove(&key)
     };
+    {
+        let mut stdinmap = SCRIPT_STDIN.lock().map_err(|e| e.to_string())?;
+        stdinmap.remove(&key);
+    }
     if let Some(pid) = old_pid {
         let _ = cmd("taskkill")
             .args(["/F", "/T", "/PID", &pid.to_string()])
@@ -64,8 +75,24 @@ pub async fn run_script(
             .await;
     }
 
-    let mut child = cmd("cmd")
-        .args(["/C", script_path])
+    let ext = std::path::Path::new(script_path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    let mut builder = if ext == "ps1" {
+        let mut c = cmd("powershell");
+        c.args(["-ExecutionPolicy", "Bypass", "-File", script_path]);
+        c
+    } else {
+        let mut c = cmd("cmd");
+        c.args(["/C", script_path]);
+        c
+    };
+
+    let mut child = builder
+        .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true)
@@ -73,10 +100,15 @@ pub async fn run_script(
         .map_err(|e| format!("Failed to start script: {}", e))?;
 
     let pid = child.id().ok_or("Failed to get script process PID")?;
+    let stdin = child.stdin.take().ok_or("Failed to get script stdin")?;
 
     {
         let mut procs = SCRIPT_PROCESSES.lock().map_err(|e| e.to_string())?;
         procs.insert(key.clone(), pid);
+    }
+    {
+        let mut stdinmap = SCRIPT_STDIN.lock().map_err(|e| e.to_string())?;
+        stdinmap.insert(key.clone(), stdin);
     }
 
     let id_owned = id.to_string();
@@ -133,21 +165,34 @@ pub async fn run_script(
         );
 
         // Clean up
+        let key = script_key(&id_owned);
         if let Ok(mut procs) = SCRIPT_PROCESSES.lock() {
-            procs.remove(&format!("script:{}", id_owned));
+            procs.remove(&key);
+        }
+        if let Ok(mut stdinmap) = SCRIPT_STDIN.lock() {
+            stdinmap.remove(&key);
         }
     });
 
     Ok(())
 }
 
+/// Read a local script file and return its contents as a UTF-8 string.
+pub fn read_script_file(path: &str) -> Result<String, String> {
+    std::fs::read_to_string(path).map_err(|e| e.to_string())
+}
+
 /// Stop a running script by id.
 pub async fn stop_script(id: &str) -> Result<(), String> {
-    let key = format!("script:{}", id);
+    let key = script_key(id);
     let pid = {
         let mut procs = SCRIPT_PROCESSES.lock().map_err(|e| e.to_string())?;
         procs.remove(&key)
     };
+    {
+        let mut stdinmap = SCRIPT_STDIN.lock().map_err(|e| e.to_string())?;
+        stdinmap.remove(&key);
+    }
 
     if let Some(pid) = pid {
         let _ = cmd("taskkill")
@@ -158,4 +203,20 @@ pub async fn stop_script(id: &str) -> Result<(), String> {
     } else {
         Err("No script running with this id".to_string())
     }
+}
+
+/// Write data to a running script's stdin (e.g. to respond to interactive prompts).
+pub async fn send_script_input(id: &str, data: &str) -> Result<(), String> {
+    let key = script_key(id);
+    // Remove stdin from the map so the lock is not held across the await.
+    let mut stdin = {
+        let mut stdinmap = SCRIPT_STDIN.lock().map_err(|e| e.to_string())?;
+        stdinmap.remove(&key).ok_or_else(|| "No script running with this id".to_string())?
+    };
+    let result = stdin.write_all(data.as_bytes()).await.map_err(|e| e.to_string());
+    // Put stdin back so subsequent writes still work.
+    if let Ok(mut stdinmap) = SCRIPT_STDIN.lock() {
+        stdinmap.insert(key, stdin);
+    }
+    result
 }

@@ -99,6 +99,8 @@ pub fn run() {
             // Script execution
             run_local_script,
             stop_local_script,
+            read_script_file,
+            send_script_input,
             // File utilities
             write_text_file_to_path,
             append_text_to_file,
@@ -466,6 +468,16 @@ async fn run_local_script(
 #[tauri::command]
 async fn stop_local_script(id: String) -> Result<(), String> {
     script_util::stop_script(&id).await
+}
+
+#[tauri::command]
+fn read_script_file(path: String) -> Result<String, String> {
+    script_util::read_script_file(&path)
+}
+
+#[tauri::command]
+async fn send_script_input(id: String, data: String) -> Result<(), String> {
+    script_util::send_script_input(&id, &data).await
 }
 
 // ── File Utilities ──

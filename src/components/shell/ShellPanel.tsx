@@ -12,6 +12,7 @@ import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { useDeviceStore } from "../../store/deviceStore";
 import { useConfigStore } from "../../store/configStore";
 import { startShellStream, stopShellStream } from "../../utils/adb";
+import { stopLocalScript, sendScriptInput } from "../../utils/script";
 import { startHdcShellStream, stopHdcShellStream } from "../../utils/hdc";
 import { writeToPort } from "../../utils/serial";
 import { useSerialData } from "../../hooks/useSerialEvents";
@@ -360,9 +361,11 @@ export function ShellPanel() {
       writeToDeviceBuffer(event.payload.id, event.payload.data);
     });
     const unlistenExit = listen<{ id: string; code: number }>("script_exit", (event) => {
-      const exitLine = `\n[Script exited with code ${event.payload.code}]\n`;
-      writeToDeviceBuffer(event.payload.id, exitLine);
-      setDeviceRunning(event.payload.id, false);
+      const { id, code } = event.payload;
+      stoppingMap.current[id] = false;
+      if (selectedDeviceIdRef.current === id) setStopping(false);
+      writeToDeviceBuffer(id, `\n[Script exited with code ${code}]\n`);
+      setDeviceRunning(id, false);
     });
     return () => {
       unlistenOutput.then((f) => f());
@@ -410,15 +413,14 @@ export function ShellPanel() {
     if (!selectedDevice) return;
     stoppingMap.current[selectedDevice.id] = true;
     setStopping(true);
-    try {
-      if (selectedDevice.type === "adb") {
-        await stopShellStream(selectedDevice.serial);
-      } else if (selectedDevice.type === "ohos") {
-        await stopHdcShellStream(selectedDevice.serial);
-      }
-    } catch {
-      // Process may have already exited
+    // Run shell stream stop and script kill independently so one failure
+    // does not prevent the other from being called.
+    if (selectedDevice.type === "adb") {
+      await stopShellStream(selectedDevice.serial).catch(() => {});
+    } else if (selectedDevice.type === "ohos") {
+      await stopHdcShellStream(selectedDevice.serial).catch(() => {});
     }
+    await stopLocalScript(selectedDevice.id).catch(() => {});
   };
 
   const handleClear = () => {
@@ -681,6 +683,21 @@ export function ShellPanel() {
                 {stopping ? "Stopping..." : "Stop"}
               </Button>
             )}
+            <Tooltip title="Send Enter">
+              <Button
+                size="small"
+                onClick={async () => {
+                  if (selectedDevice.type === "serial") {
+                    await writeToPort(selectedDevice.serial, "\r\n").catch(() => {});
+                  } else {
+                    await sendScriptInput(selectedDevice.id, "\n").catch(() => {});
+                  }
+                }}
+                style={{ fontFamily: "monospace" }}
+              >
+                ↵
+              </Button>
+            </Tooltip>
             {selectedDevice.type === "serial" && (
               <Tooltip title="Send Ctrl+C (interrupt)">
                 <Button

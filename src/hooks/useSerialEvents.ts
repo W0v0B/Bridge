@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useDeviceStore } from "../store/deviceStore";
+import { stopLocalScript } from "../utils/script";
 
 interface SerialDataEvent {
   port: string;
@@ -31,6 +32,7 @@ export function useSerialDisconnect() {
         (d) => d.type === "serial" && d.serial === portName
       );
       if (device) {
+        stopLocalScript(device.id).catch(() => {});
         removeDevice(device.id);
       }
     });
