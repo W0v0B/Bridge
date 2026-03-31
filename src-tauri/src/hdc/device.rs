@@ -5,7 +5,7 @@ use std::time::Duration;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
-use crate::util::cmd;
+use crate::util::{cmd, decode_process_output};
 
 use super::commands::{hdc_path, run_hdc};
 
@@ -145,8 +145,8 @@ pub async fn disconnect_device(addr: &str) -> Result<String, String> {
 async fn try_remount_cmd(_connect_key: &str, args: &[&str]) -> (bool, String) {
     match cmd(hdc_path()).args(args).output().await {
         Ok(out) => {
-            let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-            let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+            let stdout = decode_process_output(&out.stdout);
+            let stderr = decode_process_output(&out.stderr);
             let combined = format!("{}{}", stdout, stderr);
             let trimmed = combined.trim().to_string();
 

@@ -1,5 +1,5 @@
 use serde::Serialize;
-use crate::util::cmd;
+use crate::util::{cmd, decode_process_output};
 
 use super::commands::hdc_path;
 
@@ -20,7 +20,7 @@ pub async fn list_bundles(connect_key: &str) -> Result<Vec<BundleInfo>, String> 
         .await
         .map_err(|e| format!("Failed to run bm dump: {}", e))?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stdout = decode_process_output(&output.stdout);
     let names: Vec<String> = stdout
         .lines()
         .map(|l| l.trim().to_string())
@@ -68,7 +68,7 @@ async fn fetch_bundle_detail(connect_key: &str, bundle_name: &str) -> BundleInfo
         .await;
 
     let (code_path, app_type) = if let Ok(out) = result {
-        let text = String::from_utf8_lossy(&out.stdout).to_string();
+        let text = decode_process_output(&out.stdout);
         parse_bundle_detail(&text)
     } else {
         (String::new(), "system".to_string())
@@ -131,7 +131,7 @@ pub async fn force_stop_bundle(connect_key: &str, bundle_name: &str) -> Result<(
         .await
         .map_err(|e| format!("Failed to run aa force-stop: {}", e))?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stdout = decode_process_output(&output.stdout).trim().to_string();
     if output.status.success() || stdout.contains("successfully") {
         Ok(())
     } else {
@@ -147,7 +147,7 @@ pub async fn clear_bundle_data(connect_key: &str, bundle_name: &str) -> Result<(
         .await
         .map_err(|e| format!("Failed to run bm clean: {}", e))?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stdout = decode_process_output(&output.stdout).trim().to_string();
     if output.status.success() || stdout.contains("successfully") {
         Ok(())
     } else {
@@ -163,8 +163,8 @@ pub async fn install_hap(connect_key: &str, hap_path: &str) -> Result<String, St
         .await
         .map_err(|e| format!("Failed to run hdc install: {}", e))?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let stdout = decode_process_output(&output.stdout);
+    let stderr = decode_process_output(&output.stderr);
     let combined = format!("{}{}", stdout, stderr);
 
     if output.status.success() || combined.to_lowercase().contains("success") {
@@ -182,8 +182,8 @@ pub async fn uninstall_bundle(connect_key: &str, bundle_name: &str) -> Result<St
         .await
         .map_err(|e| format!("Failed to run hdc uninstall: {}", e))?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let stdout = decode_process_output(&output.stdout);
+    let stderr = decode_process_output(&output.stderr);
     let combined = format!("{}{}", stdout, stderr);
 
     if output.status.success() || combined.to_lowercase().contains("success") {

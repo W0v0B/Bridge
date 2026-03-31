@@ -7,7 +7,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncBufReadExt, BufReader};
-use crate::util::cmd;
+use crate::util::{cmd, decode_process_output};
 use tokio::time::Instant;
 
 use super::commands::adb_path;
@@ -408,8 +408,7 @@ pub async fn clear_device_log(serial: &str) -> Result<(), String> {
     if output.status.success() {
         Ok(())
     } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(format!("logcat -c failed: {}", stderr))
+        Err(format!("logcat -c failed: {}", decode_process_output(&output.stderr)))
     }
 }
 

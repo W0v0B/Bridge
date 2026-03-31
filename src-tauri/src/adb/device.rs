@@ -5,7 +5,7 @@ use std::time::Duration;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
-use crate::util::cmd;
+use crate::util::{cmd, decode_process_output};
 
 use super::commands::adb_path;
 
@@ -133,8 +133,8 @@ async fn attempt_root_and_remount(serial: String, app: AppHandle) {
         Ok(output) => {
             let text = format!(
                 "{}{}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
+                decode_process_output(&output.stdout),
+                decode_process_output(&output.stderr)
             );
             let lower = text.to_lowercase();
             if lower.contains("already running as root") {
@@ -149,7 +149,7 @@ async fn attempt_root_and_remount(serial: String, app: AppHandle) {
                         .output()
                         .await
                     {
-                        if String::from_utf8_lossy(&out.stdout).trim() == "root" {
+                        if decode_process_output(&out.stdout).trim() == "root" {
                             rooted = true;
                             break;
                         }
@@ -177,8 +177,8 @@ async fn attempt_root_and_remount(serial: String, app: AppHandle) {
             Ok(output) => {
                 let text = format!(
                     "{}{}",
-                    String::from_utf8_lossy(&output.stdout),
-                    String::from_utf8_lossy(&output.stderr)
+                    decode_process_output(&output.stdout),
+                    decode_process_output(&output.stderr)
                 )
                 .trim()
                 .to_string();

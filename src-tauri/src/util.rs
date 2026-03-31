@@ -7,6 +7,44 @@ use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 
+// On Windows, cmd.exe and other processes may output bytes in the system OEM
+// codepage (e.g. GBK on Chinese systems) rather than UTF-8.  This function
+// tries UTF-8 first; if that fails it detects the OEM codepage and decodes
+// accordingly, preventing replacement-character corruption.
+pub fn decode_process_output(bytes: &[u8]) -> String {
+    if let Ok(s) = std::str::from_utf8(bytes) {
+        return s.to_owned();
+    }
+    decode_oem(bytes)
+}
+
+#[cfg(target_os = "windows")]
+extern "system" {
+    fn GetOEMCP() -> u32;
+}
+
+#[cfg(target_os = "windows")]
+fn decode_oem(bytes: &[u8]) -> String {
+    use std::sync::OnceLock;
+    static OEM_ENCODING: OnceLock<&'static encoding_rs::Encoding> = OnceLock::new();
+    let encoding = OEM_ENCODING.get_or_init(|| {
+        let cp = unsafe { GetOEMCP() };
+        match cp {
+            936 | 54936 => encoding_rs::GBK,
+            950 => encoding_rs::BIG5,
+            949 => encoding_rs::EUC_KR,
+            932 => encoding_rs::SHIFT_JIS,
+            _ => encoding_rs::UTF_8,
+        }
+    });
+    encoding.decode(bytes).0.into_owned()
+}
+
+#[cfg(not(target_os = "windows"))]
+fn decode_oem(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
 /// Create a `Command` that won't spawn a visible console window on Windows.
 ///
 /// In production (GUI app with no attached console), every `Command::new()`
@@ -82,8 +120,16 @@ pub async fn run_script(
         .to_ascii_lowercase();
 
     let mut builder = if ext == "ps1" {
+        // PowerShell defaults to the system OEM codepage; set encoding explicitly.
+        // Single quotes in the path are escaped by doubling them ('a''b' = a'b).
+        let ps_cmd = format!(
+            "[Console]::OutputEncoding=[Text.Encoding]::UTF8;\
+            [Console]::InputEncoding=[Text.Encoding]::UTF8;\
+            & '{}'",
+            script_path.replace('\'', "''")
+        );
         let mut c = cmd("powershell");
-        c.args(["-ExecutionPolicy", "Bypass", "-File", script_path]);
+        c.args(["-ExecutionPolicy", "Bypass", "-NoProfile", "-Command", &ps_cmd]);
         c
     } else {
         let mut c = cmd("cmd");
@@ -124,7 +170,7 @@ pub async fn run_script(
                 match stderr.read(&mut buf).await {
                     Ok(0) | Err(_) => break,
                     Ok(n) => {
-                        let data = String::from_utf8_lossy(&buf[..n]).to_string();
+                        let data = decode_process_output(&buf[..n]);
                         let _ = app_stderr.emit(
                             "script_output",
                             ScriptOutput { id: id_stderr.clone(), data },
@@ -143,7 +189,7 @@ pub async fn run_script(
                 match stdout.read(&mut buf).await {
                     Ok(0) => break,
                     Ok(n) => {
-                        let data = String::from_utf8_lossy(&buf[..n]).to_string();
+                        let data = decode_process_output(&buf[..n]);
                         let _ = app.emit(
                             "script_output",
                             ScriptOutput { id: id_owned.clone(), data },

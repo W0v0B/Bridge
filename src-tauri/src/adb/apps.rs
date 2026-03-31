@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use serde::Serialize;
-use crate::util::cmd;
+use crate::util::{cmd, decode_process_output};
 
 use super::commands::adb_path;
 
@@ -75,7 +75,7 @@ pub async fn re_enable_package(serial: &str, package: &str) -> Result<String, St
         .await
         .map_err(|e| format!("Failed to run pm install-existing: {}", e))?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stdout = decode_process_output(&output.stdout).trim().to_string();
     if output.status.success() || stdout.contains("installed for user") {
         Ok(stdout)
     } else {
@@ -106,7 +106,7 @@ pub async fn force_stop_package(serial: &str, package: &str) -> Result<(), Strin
     if output.status.success() {
         Ok(())
     } else {
-        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+        Err(decode_process_output(&output.stderr).trim().to_string())
     }
 }
 
@@ -118,7 +118,7 @@ pub async fn clear_package_data(serial: &str, package: &str) -> Result<String, S
         .await
         .map_err(|e| format!("Failed to run pm clear: {}", e))?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stdout = decode_process_output(&output.stdout).trim().to_string();
     if output.status.success() || stdout.to_lowercase().contains("success") {
         Ok(stdout)
     } else {
@@ -196,8 +196,8 @@ pub async fn uninstall_package(
             .map_err(|e| format!("Failed to run pm uninstall --user 0: {}", e))?
     };
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let stdout = decode_process_output(&output.stdout);
+    let stderr = decode_process_output(&output.stderr);
     let combined = format!("{}{}", stdout, stderr);
 
     if output.status.success() || combined.to_lowercase().contains("success") {
@@ -218,5 +218,5 @@ async fn run_pm(serial: &str, pm_args: &[&str]) -> Result<String, String> {
         .await
         .map_err(|e| format!("Failed to run pm: {}", e))?;
 
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    Ok(decode_process_output(&output.stdout))
 }

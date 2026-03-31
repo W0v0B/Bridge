@@ -6,7 +6,7 @@ use once_cell::sync::Lazy;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 use tokio::io::AsyncReadExt;
-use crate::util::cmd;
+use crate::util::{cmd, decode_process_output};
 
 /// Resolve the path to the ADB executable.
 /// Search order:
@@ -80,8 +80,8 @@ pub async fn run_adb(args: &[&str]) -> Result<String, String> {
         .map_err(|e| format!("Failed to run adb: {}", e))?;
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = decode_process_output(&output.stderr);
+        let stdout = decode_process_output(&output.stdout);
         return Err(format!(
             "adb {} failed: {}{}",
             args.join(" "),
@@ -90,7 +90,7 @@ pub async fn run_adb(args: &[&str]) -> Result<String, String> {
         ));
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    Ok(decode_process_output(&output.stdout))
 }
 
 /// Run `adb -s <serial> shell <command>` and return stdout.
@@ -152,7 +152,7 @@ pub async fn start_shell_stream(
                 match stderr.read(&mut buf).await {
                     Ok(0) | Err(_) => break,
                     Ok(n) => {
-                        let data = String::from_utf8_lossy(&buf[..n]).to_string();
+                        let data = decode_process_output(&buf[..n]);
                         let _ = app_stderr.emit(
                             "shell_output",
                             ShellOutput {
@@ -173,7 +173,7 @@ pub async fn start_shell_stream(
                 match stdout.read(&mut buf).await {
                     Ok(0) => break,
                     Ok(n) => {
-                        let data = String::from_utf8_lossy(&buf[..n]).to_string();
+                        let data = decode_process_output(&buf[..n]);
                         let _ = app.emit(
                             "shell_output",
                             ShellOutput {

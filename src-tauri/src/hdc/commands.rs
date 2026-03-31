@@ -6,7 +6,7 @@ use once_cell::sync::Lazy;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 use tokio::io::AsyncReadExt;
-use crate::util::cmd;
+use crate::util::{cmd, decode_process_output};
 
 /// Resolve the path to the HDC executable.
 /// Search order:
@@ -84,8 +84,8 @@ pub async fn run_hdc(args: &[&str]) -> Result<String, String> {
         .await
         .map_err(|e| format!("Failed to run hdc: {}", e))?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let stdout = decode_process_output(&output.stdout);
+    let stderr = decode_process_output(&output.stderr);
 
     if !output.status.success() {
         return Err(format!(
@@ -153,7 +153,7 @@ pub async fn start_shell_stream(
                 match stderr.read(&mut buf).await {
                     Ok(0) | Err(_) => break,
                     Ok(n) => {
-                        let data = String::from_utf8_lossy(&buf[..n]).to_string();
+                        let data = decode_process_output(&buf[..n]);
                         let _ = app_stderr.emit(
                             "hdc_shell_output",
                             HdcShellOutput {
@@ -174,7 +174,7 @@ pub async fn start_shell_stream(
                 match stdout.read(&mut buf).await {
                     Ok(0) => break,
                     Ok(n) => {
-                        let data = String::from_utf8_lossy(&buf[..n]).to_string();
+                        let data = decode_process_output(&buf[..n]);
                         let _ = app.emit(
                             "hdc_shell_output",
                             HdcShellOutput {

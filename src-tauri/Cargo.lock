@@ -129,9 +129,10 @@ dependencies = [
 
 [[package]]
 name = "bridge"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "base64 0.22.1",
+ "encoding_rs",
  "once_cell",
  "regex",
  "serde",
