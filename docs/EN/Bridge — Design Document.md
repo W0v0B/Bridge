@@ -364,6 +364,7 @@ interface ShellExit {
 > - **Process tree kill**: Uses `taskkill /F /T /PID` on Windows to kill the entire process tree, not just the top-level `adb.exe` client.
 > - **`kill_on_drop(true)`**: Safety net so the child process is automatically killed if the tokio task panics or is aborted.
 > - **One stream per device**: Starting a new stream on the same device auto-stops the previous one. This avoids orphaned processes.
+> - **OEM codepage decoding**: All subprocess bytes pass through `decode_process_output()` before string conversion. It tries UTF-8 first; on failure it calls `GetOEMCP()` (Windows API) and decodes with `encoding_rs` using the system codepage (e.g. GBK on Chinese Windows). This prevents U+FFFD corruption of non-ASCII output from `adb.exe`, `hdc.exe`, and local scripts.
 
 #### 4.1.5 App Manager
 
@@ -593,7 +594,29 @@ Commands are organised into **groups** (folders), displayed as a VS Code-style c
 Each command row has a `⋯` dropdown with a **Move to** submenu listing all groups and "Ungrouped", allowing commands to be reassigned at any time.
 
 - **ADB devices**: quick command runs via `startShellStream()` — output streams in real-time via `shell_output` events; sets the shell running state so the Stop button appears
+- **OHOS devices**: quick command runs via `startHdcShellStream()`
 - **Serial devices**: quick command sends via `writeToPort(command + "\r\n")` — response arrives asynchronously via `serial_data` events
+
+**Script execution** (when `scriptPath` is set on a command):
+
+| Extension | Execution |
+|-----------|-----------|
+| `.sh` | Read locally → split on `\r?\n` → send each non-blank line to the device with 200 ms between sends (ADB: `startShellStream`; OHOS: `startHdcShellStream`; Serial: `writeToPort`) |
+| `.bat` / `.cmd` | Run locally via `cmd /C <path>` |
+| `.ps1` | Run locally via `powershell -ExecutionPolicy Bypass -NoProfile -Command "[Console]::OutputEncoding=UTF8; & '<path>'"` |
+
+Local scripts (`.bat`/`.cmd`/`.ps1`) stream stdout/stderr via `script_output` Tauri events and fire `script_exit` on completion. The Rust backend (`src-tauri/src/util.rs`):
+
+```rust
+run_script(id, script_path, app)   // spawns process, streams output, fires script_exit
+stop_script(id)                    // kills via taskkill /F /T /PID
+send_script_input(id, data)        // writes to the script's stdin (for interactive prompts)
+read_script_file(path)             // reads a .sh file for line-by-line dispatch
+```
+
+Stdin is captured at spawn time and stored in `SCRIPT_STDIN: Lazy<Mutex<HashMap<String, ChildStdin>>>`. `send_script_input` removes the handle, writes, then re-inserts (to avoid holding `MutexGuard` across `.await`).
+
+**Zombie prevention**: `stopLocalScript(device.id)` is called (fire-and-forget) before every device disconnect — in `Sidebar.handleDisconnect()` and `useSerialDisconnect()`. This ensures the process is killed and the serial port freed before the port is closed.
 
 **Sequence Runner** — a Sequence Runner section below the command list allows looping through commands that have a `sequenceOrder` set (grouping is ignored by the runner — it operates on the full flat command list):
 - Each device has **independent** sequence state stored in a per-device ref map in `QuickCommandsPanel`
@@ -772,13 +795,16 @@ Shown when no device is selected. Vertically and horizontally centred within the
 │  │ Max lines [5000▾]  0=unlimited    │   │  │ Cmd:   [____________]  │  │
 │  └───────────────────────────────────┘   │  │ [+ Add Command]        │  │
 │──────────────────────────────────────────│  └────────────────────────┘  │
-│ $ [______________________________] [Stop]│                              │
+│ $ [______________________________] [Stop][↵]│                           │
 └──────────────────────────────────────────┴──────────────────────────────┘
 ```
 
 **Execution model:**
-- **ADB devices**: prefix `$`. All commands execute via `startShellStream()` — output streams in real-time via `shell_output` events. A **Stop** button appears while a command is running, calling `stopShellStream()` to terminate it.
+- **ADB devices**: prefix `$`. All commands execute via `startShellStream()` — output streams in real-time via `shell_output` events. A **Stop** button appears while a command is running, calling both `stopShellStream()` and `stopLocalScript()` independently to terminate it.
+- **OHOS devices**: prefix `$`. Commands execute via `startHdcShellStream()`.
 - **Serial devices**: prefix `>`. Command sent via `writeToPort()`, response arrives asynchronously via `serial_data` events and is appended to the output area.
+- **Script files** (from Quick Commands): local scripts stream output via `script_output` events; `.sh` scripts are dispatched line-by-line to the device shell.
+- **↵ Enter button**: always visible; sends `\r\n` to serial or injects `\n` into the running script's stdin for ADB/OHOS — useful for responding to interactive prompts (`pause`, `read`, `Confirm?`) without stopping the script.
 - Panels are resizable via `react-resizable-panels` (default 70/30 split).
 
 **Per-device state:**

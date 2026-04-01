@@ -364,6 +364,7 @@ interface ShellExit {
 > - **进程树终止**：在 Windows 上使用 `taskkill /F /T /PID` 终止整个进程树，而不仅仅是顶层 `adb.exe` 客户端。
 > - **`kill_on_drop(true)`**：安全保障，在 tokio 任务 panic 或被中止时自动终止子进程。
 > - **每设备一个流**：在同一设备上启动新流时自动停止前一个流，避免孤立进程。
+> - **OEM 代码页解码**：所有子进程字节在转为字符串前均经过 `decode_process_output()` 处理：先尝试 UTF-8（快速路径），失败时调用 `GetOEMCP()`（Windows API）获取系统代码页，再通过 `encoding_rs` 解码（如中文 Windows 的 GBK/936）。可防止 `adb.exe`、`hdc.exe` 及本地脚本输出的非 ASCII 字符被替换为 U+FFFD 乱码。
 
 #### 4.1.5 应用管理器
 
@@ -593,7 +594,29 @@ interface QuickCommand {
 每个命令行的 `⋯` 下拉菜单中包含**移动到**子菜单，列出所有分组和"未分组"选项，允许随时重新分配命令所属分组。
 
 - **ADB 设备**：快捷命令通过 `startShellStream()` 执行——输出通过 `shell_output` 事件实时流式传输；设置 shell 运行状态以显示 Stop 按钮
+- **OHOS 设备**：快捷命令通过 `startHdcShellStream()` 执行
 - **串口设备**：快捷命令通过 `writeToPort(command + "\r\n")` 发送——响应通过 `serial_data` 事件异步到达
+
+**脚本执行**（命令设置了 `scriptPath` 时）：
+
+| 扩展名 | 执行方式 |
+|--------|---------|
+| `.sh` | 本地读取 → 按 `\r?\n` 分割 → 逐行发送到设备（200 ms 间隔）：ADB 用 `startShellStream`，OHOS 用 `startHdcShellStream`，串口用 `writeToPort` |
+| `.bat` / `.cmd` | 本地通过 `cmd /C <路径>` 运行 |
+| `.ps1` | 本地通过 `powershell -ExecutionPolicy Bypass -NoProfile -Command "[Console]::OutputEncoding=UTF8; & '<路径>'"` 运行 |
+
+本地脚本（`.bat`/`.cmd`/`.ps1`）通过 `script_output` Tauri 事件流式传输 stdout/stderr，完成时触发 `script_exit`。Rust 后端（`src-tauri/src/util.rs`）：
+
+```rust
+run_script(id, script_path, app)   // 启动进程，流式传输输出，完成时触发 script_exit
+stop_script(id)                    // 通过 taskkill /F /T /PID 终止
+send_script_input(id, data)        // 向脚本 stdin 写入数据（用于交互式提示）
+read_script_file(path)             // 读取 .sh 文件内容（用于逐行分发）
+```
+
+Stdin 在启动时捕获并存储于 `SCRIPT_STDIN: Lazy<Mutex<HashMap<String, ChildStdin>>>`。`send_script_input` 先从 map 中取出句柄，写入后再放回（避免在 `.await` 跨越点持有 `MutexGuard`）。
+
+**僵尸进程防护**：每次设备断开前都会调用（fire-and-forget）`stopLocalScript(device.id)`——在 `Sidebar.handleDisconnect()` 和 `useSerialDisconnect()`（监听 `serial_disconnected` 事件）中均已处理，确保在关闭串口前终止脚本进程并释放端口。
 
 **序列执行器** — 命令列表下方的序列执行器区块允许循环执行设置了 `sequenceOrder` 的命令（分组不影响序列执行——执行器在完整的扁平命令列表上操作）：
 - 每台设备有**独立**的序列状态，存储在 `QuickCommandsPanel` 中逐设备的 ref 映射中
@@ -772,13 +795,16 @@ interface ConnectedDevice {
 │  │ Max lines [5000▾]  0=unlimited    │   │  │ Cmd:   [____________]  │  │
 │  └───────────────────────────────────┘   │  │ [+ Add Command]        │  │
 │──────────────────────────────────────────│  └────────────────────────┘  │
-│ $ [______________________________] [Stop]│                              │
+│ $ [______________________________] [Stop][↵]│                           │
 └──────────────────────────────────────────┴──────────────────────────────┘
 ```
 
 **执行模型：**
-- **ADB 设备**：前缀 `$`。所有命令通过 `startShellStream()` 执行——输出通过 `shell_output` 事件实时流式传输。命令运行时出现 **Stop** 按钮，调用 `stopShellStream()` 终止命令。
+- **ADB 设备**：前缀 `$`。所有命令通过 `startShellStream()` 执行——输出通过 `shell_output` 事件实时流式传输。命令运行时出现 **Stop** 按钮，独立调用 `stopShellStream()` 与 `stopLocalScript()` 终止命令。
+- **OHOS 设备**：前缀 `$`。命令通过 `startHdcShellStream()` 执行。
 - **串口设备**：前缀 `>`。命令通过 `writeToPort()` 发送，响应通过 `serial_data` 事件异步到达并追加到输出区域。
+- **脚本文件**（来自快捷命令）：本地脚本通过 `script_output` 事件流式传输输出；`.sh` 脚本逐行发送到设备 shell。
+- **↵ 回车按钮**：始终可见；串口发送 `\r\n`，ADB/OHOS 向运行脚本的 stdin 注入 `\n`——可用于响应交互式提示（`pause`、`read`、`Confirm?`）而无需停止脚本。
 - 面板通过 `react-resizable-panels` 可调整大小（默认 70/30 分割）。
 
 **逐设备状态：**
