@@ -101,7 +101,8 @@ fn parse_tlogcat_line(line: &str) -> Option<LogEntry> {
 }
 
 /// Check if a log entry passes the given filter.
-fn passes_filter(entry: &LogEntry, filter: &LogcatFilter) -> bool {
+/// `keyword_lower` is the pre-lowercased keyword (avoids repeated `.to_lowercase()` per line).
+fn passes_filter(entry: &LogEntry, filter: &LogcatFilter, keyword_lower: Option<&str>) -> bool {
     // Level threshold
     if let Some(ref min_level) = filter.level {
         let levels = ["V", "D", "I", "W", "E", "F"];
@@ -117,11 +118,11 @@ fn passes_filter(entry: &LogEntry, filter: &LogcatFilter) -> bool {
             return false;
         }
     }
-    // Keyword search
-    if let Some(ref keyword) = filter.keyword {
-        if !keyword.is_empty()
-            && !entry.message.to_lowercase().contains(&keyword.to_lowercase())
-            && !entry.tag.to_lowercase().contains(&keyword.to_lowercase())
+    // Keyword search — keyword is pre-lowercased by caller
+    if let Some(kw) = keyword_lower {
+        if !kw.is_empty()
+            && !entry.message.to_lowercase().contains(kw)
+            && !entry.tag.to_lowercase().contains(kw)
         {
             return false;
         }
@@ -160,6 +161,10 @@ pub async fn start(
     }
 
     let serial_owned = serial.to_string();
+    // Pre-lowercase keyword once so passes_filter doesn't re-allocate per line
+    let keyword_lower: Option<String> = filter.keyword.as_ref()
+        .filter(|k| !k.is_empty())
+        .map(|k| k.to_lowercase());
 
     tokio::spawn(async move {
         if let Some(stdout) = child.stdout.take() {
@@ -168,6 +173,7 @@ pub async fn start(
             let mut batch: Vec<LogEntry> = Vec::with_capacity(64);
             let mut last_flush = Instant::now();
             let flush_interval = Duration::from_millis(50);
+            let kw = keyword_lower.as_deref();
 
             loop {
                 // Use a timeout so we flush partial batches promptly
@@ -176,7 +182,7 @@ pub async fn start(
                 match maybe_line {
                     Ok(Ok(Some(line))) => {
                         if let Some(entry) = parse_logcat_line(&line) {
-                            if passes_filter(&entry, &filter) {
+                            if passes_filter(&entry, &filter, kw) {
                                 batch.push(entry);
                             }
                         }
@@ -185,9 +191,8 @@ pub async fn start(
                             if !batch.is_empty() {
                                 let _ = app.emit("logcat_lines", LogcatBatch {
                                     serial: serial_owned.clone(),
-                                    entries: batch.clone(),
+                                    entries: std::mem::take(&mut batch),
                                 });
-                                batch.clear();
                             }
                             last_flush = Instant::now();
                         }
@@ -197,7 +202,7 @@ pub async fn start(
                         if !batch.is_empty() {
                             let _ = app.emit("logcat_lines", LogcatBatch {
                                 serial: serial_owned.clone(),
-                                entries: batch.clone(),
+                                entries: batch,
                             });
                         }
                         break;
@@ -206,7 +211,7 @@ pub async fn start(
                         if !batch.is_empty() {
                             let _ = app.emit("logcat_lines", LogcatBatch {
                                 serial: serial_owned.clone(),
-                                entries: batch.clone(),
+                                entries: batch,
                             });
                         }
                         break;
@@ -216,9 +221,8 @@ pub async fn start(
                         if !batch.is_empty() {
                             let _ = app.emit("logcat_lines", LogcatBatch {
                                 serial: serial_owned.clone(),
-                                entries: batch.clone(),
+                                entries: std::mem::take(&mut batch),
                             });
-                            batch.clear();
                             last_flush = Instant::now();
                         }
                     }
@@ -227,8 +231,9 @@ pub async fn start(
         }
 
         // Clean up when process exits
-        let mut procs = LOGCAT_PROCESSES.lock().unwrap();
-        procs.remove(&format!("logcat:{}", serial_owned));
+        if let Ok(mut procs) = LOGCAT_PROCESSES.lock() {
+            procs.remove(&format!("logcat:{}", serial_owned));
+        }
     });
 
     Ok(())
@@ -332,9 +337,8 @@ pub async fn start_tlogcat(
                             if !batch.is_empty() {
                                 let _ = app.emit("tlogcat_lines", LogcatBatch {
                                     serial: serial_owned.clone(),
-                                    entries: batch.clone(),
+                                    entries: std::mem::take(&mut batch),
                                 });
-                                batch.clear();
                             }
                             last_flush = Instant::now();
                         }
@@ -343,7 +347,7 @@ pub async fn start_tlogcat(
                         if !batch.is_empty() {
                             let _ = app.emit("tlogcat_lines", LogcatBatch {
                                 serial: serial_owned.clone(),
-                                entries: batch.clone(),
+                                entries: batch,
                             });
                         }
                         break;
@@ -352,7 +356,7 @@ pub async fn start_tlogcat(
                         if !batch.is_empty() {
                             let _ = app.emit("tlogcat_lines", LogcatBatch {
                                 serial: serial_owned.clone(),
-                                entries: batch.clone(),
+                                entries: batch,
                             });
                         }
                         break;
@@ -361,9 +365,8 @@ pub async fn start_tlogcat(
                         if !batch.is_empty() {
                             let _ = app.emit("tlogcat_lines", LogcatBatch {
                                 serial: serial_owned.clone(),
-                                entries: batch.clone(),
+                                entries: std::mem::take(&mut batch),
                             });
-                            batch.clear();
                             last_flush = Instant::now();
                         }
                     }
@@ -371,8 +374,9 @@ pub async fn start_tlogcat(
             }
         }
 
-        let mut procs = LOGCAT_PROCESSES.lock().unwrap();
-        procs.remove(&format!("tlogcat:{}", serial_owned));
+        if let Ok(mut procs) = LOGCAT_PROCESSES.lock() {
+            procs.remove(&format!("tlogcat:{}", serial_owned));
+        }
     });
 
     Ok(())

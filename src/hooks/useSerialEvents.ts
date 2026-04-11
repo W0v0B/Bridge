@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useDeviceStore } from "../store/deviceStore";
 import { stopLocalScript } from "../utils/script";
@@ -9,15 +9,18 @@ interface SerialDataEvent {
 }
 
 export function useSerialData(callback: (event: SerialDataEvent) => void) {
+  const callbackRef = useRef(callback);
+  callbackRef.current = callback;
+
   useEffect(() => {
     const unlisten = listen<SerialDataEvent>("serial_data", (e) => {
-      callback(e.payload);
+      callbackRef.current(e.payload);
     });
 
     return () => {
       unlisten.then((fn) => fn());
     };
-  }, [callback]);
+  }, []); // register once — callbackRef absorbs updates
 }
 
 export function useSerialDisconnect() {

@@ -104,6 +104,7 @@ pub fn run() {
             // File utilities
             write_text_file_to_path,
             append_text_to_file,
+            close_log_file,
             // Background image
             save_bg_image,
             load_bg_image,
@@ -487,15 +488,37 @@ async fn write_text_file_to_path(path: String, content: String) -> Result<(), St
     std::fs::write(&path, content.as_bytes()).map_err(|e| e.to_string())
 }
 
+use std::collections::HashMap as StdHashMap;
+use std::io::{BufWriter, Write as _};
+use std::fs::{File, OpenOptions};
+use once_cell::sync::Lazy as OnceLazy;
+use std::sync::Mutex as StdMutex;
+
+static LOG_HANDLES: OnceLazy<StdMutex<StdHashMap<String, BufWriter<File>>>> =
+    OnceLazy::new(|| StdMutex::new(StdHashMap::new()));
+
 #[tauri::command]
 async fn append_text_to_file(path: String, content: String) -> Result<(), String> {
-    use std::io::Write;
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .map_err(|e| e.to_string())?;
-    file.write_all(content.as_bytes()).map_err(|e| e.to_string())
+    let mut handles = LOG_HANDLES.lock().map_err(|e| e.to_string())?;
+    if !handles.contains_key(&path) {
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .map_err(|e| e.to_string())?;
+        handles.insert(path.clone(), BufWriter::new(file));
+    }
+    let writer = handles.get_mut(&path).unwrap();
+    writer.write_all(content.as_bytes()).map_err(|e| e.to_string())?;
+    writer.flush().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn close_log_file(path: String) -> Result<(), String> {
+    if let Ok(mut handles) = LOG_HANDLES.lock() {
+        handles.remove(&path);
+    }
+    Ok(())
 }
 
 // ── Background Image Commands ──

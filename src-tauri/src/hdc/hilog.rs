@@ -92,7 +92,8 @@ fn parse_tlogcat_line(line: &str) -> Option<HilogEntry> {
     })
 }
 
-fn passes_filter(entry: &HilogEntry, filter: &HilogFilter) -> bool {
+/// `keyword_lower` is pre-lowercased by the caller to avoid repeated allocations per line.
+fn passes_filter(entry: &HilogEntry, filter: &HilogFilter, keyword_lower: Option<&str>) -> bool {
     if let Some(ref min_level) = filter.level {
         let levels = ["D", "I", "W", "E", "F"];
         let min_idx = levels.iter().position(|&l| l == min_level.as_str()).unwrap_or(0);
@@ -101,10 +102,10 @@ fn passes_filter(entry: &HilogEntry, filter: &HilogFilter) -> bool {
             return false;
         }
     }
-    if let Some(ref keyword) = filter.keyword {
-        if !keyword.is_empty()
-            && !entry.message.to_lowercase().contains(&keyword.to_lowercase())
-            && !entry.tag.to_lowercase().contains(&keyword.to_lowercase())
+    if let Some(kw) = keyword_lower {
+        if !kw.is_empty()
+            && !entry.message.to_lowercase().contains(kw)
+            && !entry.tag.to_lowercase().contains(kw)
         {
             return false;
         }
@@ -142,6 +143,10 @@ pub async fn start(
     }
 
     let connect_key_owned = connect_key.to_string();
+    // Pre-lowercase keyword once so passes_filter doesn't re-allocate per line
+    let keyword_lower: Option<String> = filter.keyword.as_ref()
+        .filter(|k| !k.is_empty())
+        .map(|k| k.to_lowercase());
 
     // Spawn a task to read stderr and emit as error-level log entries
     if let Some(stderr) = child.stderr.take() {
@@ -178,6 +183,7 @@ pub async fn start(
             let mut batch: Vec<HilogEntry> = Vec::with_capacity(64);
             let mut last_flush = Instant::now();
             let flush_interval = Duration::from_millis(50);
+            let kw = keyword_lower.as_deref();
 
             loop {
                 let maybe_line = tokio::time::timeout(flush_interval, lines.next_line()).await;
@@ -185,7 +191,7 @@ pub async fn start(
                 match maybe_line {
                     Ok(Ok(Some(line))) => {
                         if let Some(entry) = parse_hilog_line(&line) {
-                            if passes_filter(&entry, &filter) {
+                            if passes_filter(&entry, &filter, kw) {
                                 batch.push(entry);
                             }
                         }
@@ -193,9 +199,8 @@ pub async fn start(
                             if !batch.is_empty() {
                                 let _ = app.emit("hilog_lines", HilogBatch {
                                     connect_key: connect_key_owned.clone(),
-                                    entries: batch.clone(),
+                                    entries: std::mem::take(&mut batch),
                                 });
-                                batch.clear();
                             }
                             last_flush = Instant::now();
                         }
@@ -204,7 +209,7 @@ pub async fn start(
                         if !batch.is_empty() {
                             let _ = app.emit("hilog_lines", HilogBatch {
                                 connect_key: connect_key_owned.clone(),
-                                entries: batch.clone(),
+                                entries: batch,
                             });
                         }
                         break;
@@ -213,7 +218,7 @@ pub async fn start(
                         if !batch.is_empty() {
                             let _ = app.emit("hilog_lines", HilogBatch {
                                 connect_key: connect_key_owned.clone(),
-                                entries: batch.clone(),
+                                entries: batch,
                             });
                         }
                         break;
@@ -223,9 +228,8 @@ pub async fn start(
                         if !batch.is_empty() {
                             let _ = app.emit("hilog_lines", HilogBatch {
                                 connect_key: connect_key_owned.clone(),
-                                entries: batch.clone(),
+                                entries: std::mem::take(&mut batch),
                             });
-                            batch.clear();
                             last_flush = Instant::now();
                         }
                     }
@@ -236,8 +240,9 @@ pub async fn start(
         let exit_status = child.wait().await.ok();
         let code = exit_status.and_then(|s| s.code());
 
-        let mut procs = HILOG_PROCESSES.lock().unwrap();
-        procs.remove(&format!("hilog:{}", connect_key_owned));
+        if let Ok(mut procs) = HILOG_PROCESSES.lock() {
+            procs.remove(&format!("hilog:{}", connect_key_owned));
+        }
 
         let _ = app.emit("hilog_exit", HilogExit {
             connect_key: connect_key_owned,
@@ -362,9 +367,8 @@ pub async fn start_tlogcat(
                             if !batch.is_empty() {
                                 let _ = app.emit("hdc_tlogcat_lines", HilogBatch {
                                     connect_key: connect_key_owned.clone(),
-                                    entries: batch.clone(),
+                                    entries: std::mem::take(&mut batch),
                                 });
-                                batch.clear();
                             }
                             last_flush = Instant::now();
                         }
@@ -373,7 +377,7 @@ pub async fn start_tlogcat(
                         if !batch.is_empty() {
                             let _ = app.emit("hdc_tlogcat_lines", HilogBatch {
                                 connect_key: connect_key_owned.clone(),
-                                entries: batch.clone(),
+                                entries: batch,
                             });
                         }
                         break;
@@ -382,7 +386,7 @@ pub async fn start_tlogcat(
                         if !batch.is_empty() {
                             let _ = app.emit("hdc_tlogcat_lines", HilogBatch {
                                 connect_key: connect_key_owned.clone(),
-                                entries: batch.clone(),
+                                entries: batch,
                             });
                         }
                         break;
@@ -392,9 +396,8 @@ pub async fn start_tlogcat(
                         if !batch.is_empty() {
                             let _ = app.emit("hdc_tlogcat_lines", HilogBatch {
                                 connect_key: connect_key_owned.clone(),
-                                entries: batch.clone(),
+                                entries: std::mem::take(&mut batch),
                             });
-                            batch.clear();
                             last_flush = Instant::now();
                         }
                     }
@@ -405,8 +408,9 @@ pub async fn start_tlogcat(
         let exit_status = child.wait().await.ok();
         let code = exit_status.and_then(|s| s.code());
 
-        let mut procs = HILOG_PROCESSES.lock().unwrap();
-        procs.remove(&format!("tlogcat:{}", connect_key_owned));
+        if let Ok(mut procs) = HILOG_PROCESSES.lock() {
+            procs.remove(&format!("tlogcat:{}", connect_key_owned));
+        }
 
         let _ = app.emit("hilog_exit", HilogExit {
             connect_key: connect_key_owned,

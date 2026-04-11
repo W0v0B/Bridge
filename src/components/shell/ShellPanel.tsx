@@ -1,13 +1,16 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { App, Input, Button, InputNumber, Tooltip, Typography } from "antd";
 import {
   StopOutlined, ClearOutlined, SettingOutlined,
-  DownloadOutlined, FileAddOutlined, BgColorsOutlined,
+  DownloadOutlined, FileAddOutlined,
   DoubleRightOutlined, DoubleLeftOutlined, LoadingOutlined, VerticalAlignBottomOutlined,
 } from "@ant-design/icons";
+import { Terminal } from "xterm";
+import { FitAddon } from "xterm-addon-fit";
+import "xterm/css/xterm.css";
 import { save } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
-import { writeTextFileTo, appendTextToFile } from "../../utils/fs";
+import { writeTextFileTo, appendTextToFile, closeLogFile } from "../../utils/fs";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { useDeviceStore } from "../../store/deviceStore";
 import { useConfigStore } from "../../store/configStore";
@@ -19,14 +22,48 @@ import { useSerialData } from "../../hooks/useSerialEvents";
 import { useShellOutput, useShellExit } from "../../hooks/useShellEvents";
 import { useHdcShellOutput, useHdcShellExit } from "../../hooks/useHdcEvents";
 import { QuickCommandsPanel } from "./QuickCommandsPanel";
-import { AnsiConverter, stripAnsi } from "../../utils/ansi";
 
 const { Text } = Typography;
 
-interface HtmlChunk {
-  html: string;
+interface RawChunk {
+  text: string;
   lineCount: number;
 }
+
+interface TermEntry {
+  terminal: Terminal;
+  fitAddon: FitAddon;
+  div: HTMLDivElement;
+}
+
+function countNewlines(s: string): number {
+  let n = 0;
+  for (let i = 0; i < s.length; i++) if (s.charCodeAt(i) === 10) n++;
+  return n;
+}
+
+const XTERM_THEME = {
+  background: "#0d1117",
+  foreground: "#d9d9d9",
+  cursor: "#52c41a",
+  cursorAccent: "#0d1117",
+  black: "#4d4d4d",
+  red: "#ff4d4f",
+  green: "#52c41a",
+  yellow: "#faad14",
+  blue: "#1677ff",
+  magenta: "#b37feb",
+  cyan: "#13c2c2",
+  white: "#d9d9d9",
+  brightBlack: "#8c8c8c",
+  brightRed: "#ff7875",
+  brightGreen: "#95de64",
+  brightYellow: "#ffd666",
+  brightBlue: "#69b1ff",
+  brightMagenta: "#d3adf7",
+  brightCyan: "#5cdbd3",
+  brightWhite: "#ffffff",
+};
 
 export function ShellPanel() {
   const { message } = App.useApp();
@@ -36,34 +73,27 @@ export function ShellPanel() {
   const shellMaxLines = useConfigStore((s) => s.config.shellMaxLines);
   const setConfig = useConfigStore((s) => s.setConfig);
 
-  // Raw text buffers — kept for export
-  const outputMap = useRef<Record<string, string>>({});
+  // Raw text chunk ring-buffer — kept for export and terminal replay on first selection
+  const rawChunksMap = useRef<Record<string, RawChunk[]>>({});
+  const rawTotalLinesMap = useRef<Record<string, number>>({});
   const inputMap = useRef<Record<string, string>>({});
   const runningMap = useRef<Record<string, boolean>>({});
   const logFileMap = useRef<Record<string, string | null>>({});
+  const stoppingMap = useRef<Record<string, boolean>>({});
 
-  // Per-device HTML buffers (bypass React state for output rendering)
-  const htmlStringMap = useRef<Record<string, string>>({});
-  const htmlChunksMap = useRef<Record<string, HtmlChunk[]>>({});
-  const htmlTotalLinesMap = useRef<Record<string, number>>({});
-  const converterMap = useRef<Record<string, AnsiConverter>>({});
+  // xterm terminal instances, one per device (created lazily on first selection)
+  const termMapRef = useRef(new Map<string, TermEntry>());
+  const termContainerRef = useRef<HTMLDivElement>(null);
 
   const [input, setInput] = useState("");
   const [running, setRunning] = useState(false);
   const [stopping, setStopping] = useState(false);
-  const stoppingMap = useRef<Record<string, boolean>>({});
-  const autoScrollRef = useRef(true);
   const [autoScroll, setAutoScroll] = useState(true);
+  const autoScrollRef = useRef(true);
   const [showSettings, setShowSettings] = useState(false);
   const [logToFile, setLogToFile] = useState(false);
-  const [ansiColor, setAnsiColor] = useState(true);
   const [quickCmdCollapsed, setQuickCmdCollapsed] = useState(false);
-  const ansiColorMap = useRef<Record<string, boolean>>({});
 
-  const outputRef = useRef<HTMLDivElement>(null);
-  const rafId = useRef<number>(0);
-  const pendingFlush = useRef(false);
-  const domStale = useRef(false);
   const maxLinesRef = useRef(shellMaxLines);
   maxLinesRef.current = shellMaxLines;
 
@@ -73,223 +103,188 @@ export function ShellPanel() {
   const selectedDeviceRef = useRef(selectedDevice);
   selectedDeviceRef.current = selectedDevice;
 
-  const trimToMaxLines = useCallback((text: string): string => {
-    const max = maxLinesRef.current;
-    if (max <= 0) return text;
-    let count = 0;
-    let idx = text.length;
-    while (idx > 0 && count < max) {
-      idx = text.lastIndexOf("\n", idx - 1);
-      if (idx === -1) { idx = 0; break; }
-      count++;
-    }
-    return idx > 0 ? text.slice(idx + 1) : text;
-  }, []);
+  // O(1) device lookup by "type:serial" key
+  const deviceByKey = useMemo(() => {
+    const m = new Map<string, typeof devices[number]>();
+    for (const d of devices) m.set(`${d.type}:${d.serial}`, d);
+    return m;
+  }, [devices]);
+  const deviceByKeyRef = useRef(deviceByKey);
+  deviceByKeyRef.current = deviceByKey;
 
-  /**
-   * Rebuild the HTML string and chunk array for a device from its raw outputMap text.
-   * Called on device switch or ansiColor toggle.
-   */
-  const rebuildHtmlForDevice = useCallback((deviceId: string, useColor: boolean) => {
-    const rawText = outputMap.current[deviceId] ?? "";
-    const conv = new AnsiConverter();
-    converterMap.current[deviceId] = conv;
-
-    if (!rawText || !useColor) {
-      htmlChunksMap.current[deviceId] = [];
-      htmlTotalLinesMap.current[deviceId] = 0;
-      htmlStringMap.current[deviceId] = "";
-      return;
-    }
-
-    const newHtml = conv.convert(rawText);
-    const lineCount = (rawText.match(/\n/g) || []).length;
-    htmlChunksMap.current[deviceId] = [{ html: newHtml, lineCount }];
-    htmlTotalLinesMap.current[deviceId] = lineCount;
-    htmlStringMap.current[deviceId] = newHtml;
-  }, []);
-
-  /** Write the current device's HTML (or placeholder) directly to the output DOM element. */
-  const flushToDOM = useCallback(() => {
-    if (!outputRef.current) return;
-    domStale.current = false;
-    const deviceId = selectedDeviceIdRef.current;
-    const dev = selectedDeviceRef.current;
-    if (!deviceId) {
-      outputRef.current.textContent = "";
-      return;
-    }
-
-    const useColor = ansiColorMap.current[deviceId] ?? true;
-    if (useColor) {
-      const html = htmlStringMap.current[deviceId];
-      if (html) {
-        outputRef.current.innerHTML = html;
-      } else {
-        outputRef.current.textContent = dev
-          ? `Connected to ${dev.name}\nType a command below.\n`
-          : "";
-      }
-    } else {
-      const raw = outputMap.current[deviceId] ?? "";
-      outputRef.current.textContent = raw
-        ? stripAnsi(raw)
-        : (dev ? `Connected to ${dev.name}\nType a command below.\n` : "");
-    }
-
-    if (autoScrollRef.current) {
-      outputRef.current.scrollTop = outputRef.current.scrollHeight;
-    }
-  }, []);
-
-  const scheduleFlush = useCallback(() => {
-    if (!autoScrollRef.current) {
-      domStale.current = true;
-      return;
-    }
-    if (pendingFlush.current) return;
-    pendingFlush.current = true;
-    rafId.current = requestAnimationFrame(() => {
-      pendingFlush.current = false;
-      flushToDOM();
-    });
-  }, [flushToDOM]);
-
-  const handleWheel = useCallback((e: React.WheelEvent) => {
-    if (e.deltaY < 0) {
-      autoScrollRef.current = false;
-      setAutoScroll(false);
-    }
-  }, []);
-
-  const handleScroll = useCallback(() => {
-    const el = outputRef.current;
-    if (!el) return;
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 30;
-    if (atBottom) {
-      if (!autoScrollRef.current) {
-        autoScrollRef.current = true;
-        setAutoScroll(true);
-        if (domStale.current) {
-          if (!pendingFlush.current) {
-            pendingFlush.current = true;
-            cancelAnimationFrame(rafId.current);
-            rafId.current = requestAnimationFrame(() => {
-              pendingFlush.current = false;
-              flushToDOM();
-            });
-          }
+  // Clean up per-device refs when devices are removed (dispose terminals, free memory)
+  const prevDeviceIds = useRef(new Set<string>());
+  useEffect(() => {
+    const currentIds = new Set(devices.map((d) => d.id));
+    for (const id of prevDeviceIds.current) {
+      if (!currentIds.has(id)) {
+        delete rawChunksMap.current[id];
+        delete rawTotalLinesMap.current[id];
+        delete inputMap.current[id];
+        delete runningMap.current[id];
+        delete logFileMap.current[id];
+        delete stoppingMap.current[id];
+        const entry = termMapRef.current.get(id);
+        if (entry) {
+          entry.terminal.dispose();
+          entry.div.remove();
+          termMapRef.current.delete(id);
         }
       }
-    } else if (autoScrollRef.current) {
-      autoScrollRef.current = false;
-      setAutoScroll(false);
     }
-  }, [flushToDOM]);
+    prevDeviceIds.current = currentIds;
+  }, [devices]);
 
-  const scrollToBottom = useCallback(() => {
-    autoScrollRef.current = true;
-    setAutoScroll(true);
-    if (domStale.current) {
-      flushToDOM();
-    }
-    if (outputRef.current) {
-      outputRef.current.scrollTop = outputRef.current.scrollHeight;
-    }
-  }, [flushToDOM]);
-
+  // Update scrollback on all terminals when shellMaxLines changes
   useEffect(() => {
-    return () => cancelAnimationFrame(rafId.current);
+    const scrollback = shellMaxLines > 0 ? shellMaxLines : 50000;
+    for (const { terminal } of termMapRef.current.values()) {
+      terminal.options.scrollback = scrollback;
+    }
+  }, [shellMaxLines]);
+
+  /** Get or create the xterm Terminal for a device. Replays buffered raw text on first creation. */
+  const getOrCreateTerm = useCallback((deviceId: string): TermEntry | null => {
+    if (!termContainerRef.current) return null;
+    const existing = termMapRef.current.get(deviceId);
+    if (existing) return existing;
+
+    const div = document.createElement("div");
+    div.style.cssText = "height:100%;display:none;";
+    termContainerRef.current.appendChild(div);
+
+    const scrollback = maxLinesRef.current > 0 ? maxLinesRef.current : 50000;
+    const terminal = new Terminal({
+      theme: XTERM_THEME,
+      scrollback,
+      convertEol: true,
+      fontFamily: "'Cascadia Code', 'Fira Code', 'Consolas', monospace",
+      fontSize: 13,
+      lineHeight: 1.5,
+      cursorBlink: false,
+      cursorStyle: "bar",
+      disableStdin: true,
+    });
+    const fitAddon = new FitAddon();
+    terminal.loadAddon(fitAddon);
+    terminal.open(div);
+    fitAddon.fit();
+
+    // Replay buffered raw text (accumulated while device was not selected)
+    const buffered = rawChunksMap.current[deviceId] ?? [];
+    if (buffered.length > 0) {
+      for (const chunk of buffered) terminal.write(chunk.text);
+    }
+
+    const entry: TermEntry = { terminal, fitAddon, div };
+    termMapRef.current.set(deviceId, entry);
+    return entry;
   }, []);
 
-  // On device switch: restore HTML state for the new device
+  // ResizeObserver to auto-fit the active terminal when the container resizes
   useEffect(() => {
+    if (!termContainerRef.current) return;
+    const observer = new ResizeObserver(() => {
+      const id = selectedDeviceIdRef.current;
+      if (id) termMapRef.current.get(id)?.fitAddon.fit();
+    });
+    observer.observe(termContainerRef.current);
+    return () => observer.disconnect();
+  }, []);
+
+  // On device switch: hide old terminal, show (or create) new terminal
+  useEffect(() => {
+    // Hide all terminals first
+    for (const { div } of termMapRef.current.values()) {
+      div.style.display = "none";
+    }
+    autoScrollRef.current = true;
+    setAutoScroll(true);
+
     if (selectedDeviceId) {
-      const useColor = ansiColorMap.current[selectedDeviceId] ?? true;
-      // Only rebuild if we don't already have a rendered HTML string
-      if (htmlStringMap.current[selectedDeviceId] === undefined) {
-        rebuildHtmlForDevice(selectedDeviceId, useColor);
-      }
       setInput(inputMap.current[selectedDeviceId] ?? "");
       setRunning(runningMap.current[selectedDeviceId] ?? false);
       setStopping(stoppingMap.current[selectedDeviceId] ?? false);
       setLogToFile(!!logFileMap.current[selectedDeviceId]);
-      setAnsiColor(ansiColorMap.current[selectedDeviceId] ?? true);
+
+      const entry = getOrCreateTerm(selectedDeviceId);
+      if (entry) {
+        entry.div.style.display = "block";
+        entry.fitAddon.fit();
+        entry.terminal.scrollToBottom();
+      }
     }
-    autoScrollRef.current = true;
-    setAutoScroll(true);
-    flushToDOM();
-  }, [selectedDeviceId, rebuildHtmlForDevice, flushToDOM]);
+  }, [selectedDeviceId, getOrCreateTerm]);
+
+  // Dispose all terminals on unmount
+  useEffect(() => {
+    return () => {
+      for (const { terminal, div } of termMapRef.current.values()) {
+        terminal.dispose();
+        div.remove();
+      }
+      termMapRef.current.clear();
+    };
+  }, []);
 
   const writeToDeviceBuffer = useCallback((deviceId: string, text: string) => {
-    // Update raw text (for export)
-    outputMap.current[deviceId] = trimToMaxLines(
-      (outputMap.current[deviceId] ?? "") + text
-    );
+    const lineCount = countNewlines(text);
+    const max = maxLinesRef.current;
 
-    // Update HTML incrementally for the active device only
-    if (deviceId === selectedDeviceId) {
-      const useColor = ansiColorMap.current[deviceId] ?? true;
-
-      if (useColor) {
-        if (!converterMap.current[deviceId]) {
-          converterMap.current[deviceId] = new AnsiConverter();
-        }
-        const newHtml = converterMap.current[deviceId].convert(text);
-        const lineCount = (text.match(/\n/g) || []).length;
-
-        const chunks = (htmlChunksMap.current[deviceId] ??= []);
-        chunks.push({ html: newHtml, lineCount });
-
-        let total = (htmlTotalLinesMap.current[deviceId] ?? 0) + lineCount;
-        const max = maxLinesRef.current;
-
-        if (max > 0 && total > max) {
-          while (total > max && chunks.length > 1) {
-            total -= chunks.shift()!.lineCount;
-          }
-          htmlTotalLinesMap.current[deviceId] = total;
-          htmlStringMap.current[deviceId] = chunks.map((c) => c.html).join("");
-        } else {
-          htmlTotalLinesMap.current[deviceId] = total;
-          htmlStringMap.current[deviceId] =
-            (htmlStringMap.current[deviceId] ?? "") + newHtml;
-        }
+    // Update raw chunk ring-buffer (used for export and terminal replay)
+    const rawChunks = (rawChunksMap.current[deviceId] ??= []);
+    rawChunks.push({ text, lineCount });
+    let rawTotal = (rawTotalLinesMap.current[deviceId] ?? 0) + lineCount;
+    if (max > 0 && rawTotal > max) {
+      while (rawTotal > max && rawChunks.length > 1) {
+        rawTotal -= rawChunks.shift()!.lineCount;
       }
-      // For !useColor, flushToDOM reads outputMap directly via textContent
+    }
+    rawTotalLinesMap.current[deviceId] = rawTotal;
 
-      scheduleFlush();
+    // Write to xterm terminal if it already exists for this device
+    // (it exists once the device has been selected at least once)
+    const entry = termMapRef.current.get(deviceId);
+    if (entry) {
+      entry.terminal.write(text);
+      if (autoScrollRef.current && deviceId === selectedDeviceIdRef.current) {
+        entry.terminal.scrollToBottom();
+      }
     }
 
     const logPath = logFileMap.current[deviceId];
     if (logPath) {
       appendTextToFile(logPath, text).catch(() => {});
     }
-  }, [selectedDeviceId, scheduleFlush, trimToMaxLines]);
+  }, []);
 
   const appendOutput = useCallback((text: string, deviceId?: string) => {
-    const targetId = deviceId ?? selectedDeviceId;
+    const targetId = deviceId ?? selectedDeviceIdRef.current;
     if (!targetId) return;
     writeToDeviceBuffer(targetId, text);
-  }, [selectedDeviceId, writeToDeviceBuffer]);
+  }, [writeToDeviceBuffer]);
 
   const setDeviceRunning = useCallback((deviceId: string, value: boolean) => {
     runningMap.current[deviceId] = value;
-    if (deviceId === selectedDeviceId) {
+    if (deviceId === selectedDeviceIdRef.current) {
       setRunning(value);
     }
-  }, [selectedDeviceId]);
+  }, []);
+
+  // Stable callback refs for event handlers — prevents re-creating Tauri listeners on every render
+  const writeToDeviceBufferRef = useRef(writeToDeviceBuffer);
+  writeToDeviceBufferRef.current = writeToDeviceBuffer;
+  const setDeviceRunningRef = useRef(setDeviceRunning);
+  setDeviceRunningRef.current = setDeviceRunning;
 
   // Serial data events
   const handleSerialData = useCallback(
     (event: { port: string; data: string }) => {
-      const device = devices.find(
-        (d) => d.type === "serial" && d.serial === event.port
-      );
+      const device = deviceByKeyRef.current.get(`serial:${event.port}`);
       if (!device) return;
-      writeToDeviceBuffer(device.id, event.data);
+      writeToDeviceBufferRef.current(device.id, event.data);
     },
-    [devices, writeToDeviceBuffer]
+    []
   );
   useSerialData(handleSerialData);
 
@@ -297,30 +292,25 @@ export function ShellPanel() {
   useShellOutput(
     useCallback(
       (event) => {
-        const device = devices.find(
-          (d) => d.type === "adb" && d.serial === event.serial
-        );
+        const device = deviceByKeyRef.current.get(`adb:${event.serial}`);
         if (!device) return;
-        writeToDeviceBuffer(device.id, event.data);
+        writeToDeviceBufferRef.current(device.id, event.data);
       },
-      [devices, writeToDeviceBuffer]
+      []
     )
   );
 
   useShellExit(
     useCallback(
       (event) => {
-        const device = devices.find(
-          (d) => d.type === "adb" && d.serial === event.serial
-        );
+        const device = deviceByKeyRef.current.get(`adb:${event.serial}`);
         if (!device) return;
         stoppingMap.current[device.id] = false;
         if (selectedDeviceIdRef.current === device.id) setStopping(false);
-        const exitLine = `\n[Process exited with code ${event.code}]\n`;
-        writeToDeviceBuffer(device.id, exitLine);
-        setDeviceRunning(device.id, false);
+        writeToDeviceBufferRef.current(device.id, `\n[Process exited with code ${event.code}]\n`);
+        setDeviceRunningRef.current(device.id, false);
       },
-      [devices, writeToDeviceBuffer, setDeviceRunning]
+      []
     )
   );
 
@@ -328,50 +318,45 @@ export function ShellPanel() {
   useHdcShellOutput(
     useCallback(
       (event) => {
-        const device = devices.find(
-          (d) => d.type === "ohos" && d.serial === event.connect_key
-        );
+        const device = deviceByKeyRef.current.get(`ohos:${event.connect_key}`);
         if (!device) return;
-        writeToDeviceBuffer(device.id, event.data);
+        writeToDeviceBufferRef.current(device.id, event.data);
       },
-      [devices, writeToDeviceBuffer]
+      []
     )
   );
 
   useHdcShellExit(
     useCallback(
       (event) => {
-        const device = devices.find(
-          (d) => d.type === "ohos" && d.serial === event.connect_key
-        );
+        const device = deviceByKeyRef.current.get(`ohos:${event.connect_key}`);
         if (!device) return;
         stoppingMap.current[device.id] = false;
         if (selectedDeviceIdRef.current === device.id) setStopping(false);
-        const exitLine = `\n[Process exited with code ${event.code}]\n`;
-        writeToDeviceBuffer(device.id, exitLine);
-        setDeviceRunning(device.id, false);
+        writeToDeviceBufferRef.current(device.id, `\n[Process exited with code ${event.code}]\n`);
+        setDeviceRunningRef.current(device.id, false);
       },
-      [devices, writeToDeviceBuffer, setDeviceRunning]
+      []
     )
   );
 
-  // Script output/exit events
+  // Script output/exit events — registered once, use stable refs to avoid listener churn
   useEffect(() => {
     const unlistenOutput = listen<{ id: string; data: string }>("script_output", (event) => {
-      writeToDeviceBuffer(event.payload.id, event.payload.data);
+      writeToDeviceBufferRef.current(event.payload.id, event.payload.data);
     });
     const unlistenExit = listen<{ id: string; code: number }>("script_exit", (event) => {
       const { id, code } = event.payload;
       stoppingMap.current[id] = false;
       if (selectedDeviceIdRef.current === id) setStopping(false);
-      writeToDeviceBuffer(id, `\n[Script exited with code ${code}]\n`);
-      setDeviceRunning(id, false);
+      writeToDeviceBufferRef.current(id, `\n[Script exited with code ${code}]\n`);
+      setDeviceRunningRef.current(id, false);
     });
     return () => {
       unlistenOutput.then((f) => f());
       unlistenExit.then((f) => f());
     };
-  }, [writeToDeviceBuffer, setDeviceRunning]);
+  }, []);
 
   const handleCommand = async () => {
     const cmd = input.trim();
@@ -413,8 +398,6 @@ export function ShellPanel() {
     if (!selectedDevice) return;
     stoppingMap.current[selectedDevice.id] = true;
     setStopping(true);
-    // Run shell stream stop and script kill independently so one failure
-    // does not prevent the other from being called.
     if (selectedDevice.type === "adb") {
       await stopShellStream(selectedDevice.serial).catch(() => {});
     } else if (selectedDevice.type === "ohos") {
@@ -425,12 +408,9 @@ export function ShellPanel() {
 
   const handleClear = () => {
     if (!selectedDeviceId) return;
-    outputMap.current[selectedDeviceId] = "";
-    htmlStringMap.current[selectedDeviceId] = "";
-    htmlChunksMap.current[selectedDeviceId] = [];
-    htmlTotalLinesMap.current[selectedDeviceId] = 0;
-    converterMap.current[selectedDeviceId]?.reset();
-    if (outputRef.current) outputRef.current.innerHTML = "";
+    rawChunksMap.current[selectedDeviceId] = [];
+    rawTotalLinesMap.current[selectedDeviceId] = 0;
+    termMapRef.current.get(selectedDeviceId)?.terminal.clear();
   };
 
   const makeLogFilename = () => {
@@ -441,7 +421,7 @@ export function ShellPanel() {
 
   const handleExportSnapshot = async () => {
     if (!selectedDeviceId) return;
-    const content = outputMap.current[selectedDeviceId] ?? "";
+    const content = (rawChunksMap.current[selectedDeviceId] ?? []).map((c) => c.text).join("");
     const path = await save({ defaultPath: makeLogFilename(), filters: [{ name: "Text", extensions: ["txt"] }] });
     if (!path) return;
     try {
@@ -455,8 +435,10 @@ export function ShellPanel() {
   const handleToggleLogToFile = async () => {
     if (!selectedDeviceId) return;
     if (logToFile) {
+      const oldPath = logFileMap.current[selectedDeviceId];
       logFileMap.current[selectedDeviceId] = null;
       setLogToFile(false);
+      if (oldPath) closeLogFile(oldPath).catch(() => {});
       return;
     }
     const path = await save({ defaultPath: makeLogFilename(), filters: [{ name: "Text", extensions: ["txt"] }] });
@@ -470,6 +452,14 @@ export function ShellPanel() {
       message.error(String(e));
     }
   };
+
+  const scrollToBottom = useCallback(() => {
+    autoScrollRef.current = true;
+    setAutoScroll(true);
+    if (selectedDeviceId) {
+      termMapRef.current.get(selectedDeviceId)?.terminal.scrollToBottom();
+    }
+  }, [selectedDeviceId]);
 
   const shellLabel = selectedDevice?.type === "adb"
     ? "adb shell"
@@ -558,22 +548,6 @@ export function ShellPanel() {
                 <Text style={{ color: "var(--term-text)", fontSize: 10, opacity: 0.5 }}>0=unlimited</Text>
               </div>
             )}
-            <Tooltip title={ansiColor ? "ANSI colors enabled — click to disable" : "ANSI colors disabled — click to enable"}>
-              <Button
-                size="small"
-                type="text"
-                icon={<BgColorsOutlined style={{ color: ansiColor ? "#52c41a" : "#999" }} />}
-                onClick={() => {
-                  const next = !ansiColor;
-                  setAnsiColor(next);
-                  if (selectedDeviceId) {
-                    ansiColorMap.current[selectedDeviceId] = next;
-                    rebuildHtmlForDevice(selectedDeviceId, next);
-                    flushToDOM();
-                  }
-                }}
-              />
-            </Tooltip>
             <Tooltip title="Export snapshot">
               <Button
                 size="small"
@@ -618,22 +592,13 @@ export function ShellPanel() {
             )}
           </div>
 
-          {/* Output area — content managed directly via ref, no React state */}
+          {/* xterm.js terminal container — one child div per device, hidden/shown on switch */}
           <div
-            ref={outputRef}
-            className="term-output"
-            onWheel={handleWheel}
-            onScroll={handleScroll}
+            ref={termContainerRef}
             style={{
               flex: 1,
-              overflow: "auto",
-              padding: 12,
-              fontFamily: "'Cascadia Code', 'Fira Code', 'Consolas', monospace",
-              fontSize: 13,
-              lineHeight: 1.5,
-              color: "var(--term-text)",
-              whiteSpace: "pre-wrap",
-              wordBreak: "break-all",
+              overflow: "hidden",
+              background: XTERM_THEME.background,
             }}
           />
 

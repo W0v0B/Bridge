@@ -22,6 +22,9 @@ const ANSI_COLORS: Record<number, string> = {
   97: "#ffffff", // bright white
 };
 
+// Pre-computed array for O(1) 256-color index lookups (indices 0-15)
+const ANSI_COLORS_INDEXED = Object.values(ANSI_COLORS);
+
 const ANSI_BG_COLORS: Record<number, string> = {
   40: "#4d4d4d",
   41: "#ff4d4f",
@@ -270,11 +273,8 @@ export class AnsiConverter {
 
 /** Convert a 256-color index to a CSS color string. */
 function color256(n: number): string {
-  if (n < 8) {
-    return Object.values(ANSI_COLORS)[n];
-  }
   if (n < 16) {
-    return Object.values(ANSI_COLORS)[n - 8 + 8]; // bright colors start at index 8
+    return ANSI_COLORS_INDEXED[n]; // indices 0-7 normal, 8-15 bright
   }
   if (n < 232) {
     // 6x6x6 color cube

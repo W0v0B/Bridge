@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 use once_cell::sync::Lazy;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
+use crate::util::decode_process_output;
 
 // ── Serial port state ──────────────────────────────────────────────────────
 
@@ -85,14 +86,14 @@ fn serial_read_loop(
     stop_flag: Arc<AtomicBool>,
     app: AppHandle,
 ) {
-    let mut buf = [0u8; 1024];
+    let mut buf = [0u8; 4096];
     loop {
         if stop_flag.load(Ordering::Relaxed) {
             break;
         }
         match reader.read(&mut buf) {
             Ok(n) if n > 0 => {
-                let text = String::from_utf8_lossy(&buf[..n]).to_string();
+                let text = decode_process_output(&buf[..n]);
                 let _ = app.emit("serial_data", SerialDataEvent {
                     port: port_name.clone(),
                     data: text,
@@ -217,7 +218,7 @@ fn telnet_read_loop(
     stop_flag: Arc<AtomicBool>,
     app: AppHandle,
 ) {
-    let mut buf = [0u8; 1024];
+    let mut buf = [0u8; 4096];
     loop {
         if stop_flag.load(Ordering::Relaxed) {
             break;
@@ -240,7 +241,7 @@ fn telnet_read_loop(
                 }
 
                 if !filtered.is_empty() {
-                    let text = String::from_utf8_lossy(&filtered).to_string();
+                    let text = decode_process_output(&filtered);
                     let _ = app.emit("serial_data", SerialDataEvent {
                         port: session_id.clone(),
                         data: text,

@@ -1,11 +1,13 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::time::Duration;
 
 use once_cell::sync::Lazy;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 use tokio::io::AsyncReadExt;
+use tokio::time::Instant;
 use crate::util::{cmd, decode_process_output};
 
 /// Resolve the path to the HDC executable.
@@ -142,25 +144,47 @@ pub async fn start_shell_stream(
 
     let connect_key_owned = connect_key.to_string();
 
-    // Forward stderr as shell output
+    // Forward stderr as shell output (with 16ms coalescing)
     let stderr_handle = child.stderr.take();
     let ck_stderr = connect_key_owned.clone();
     let app_stderr = app.clone();
     tokio::spawn(async move {
         if let Some(mut stderr) = stderr_handle {
             let mut buf = vec![0u8; 4096];
+            let mut accum = String::new();
+            let mut last_emit = Instant::now();
+            let coalesce = Duration::from_millis(16);
             loop {
-                match stderr.read(&mut buf).await {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => {
-                        let data = decode_process_output(&buf[..n]);
-                        let _ = app_stderr.emit(
-                            "hdc_shell_output",
-                            HdcShellOutput {
+                match tokio::time::timeout(coalesce, stderr.read(&mut buf)).await {
+                    Ok(Ok(0)) | Ok(Err(_)) => {
+                        if !accum.is_empty() {
+                            let _ = app_stderr.emit("hdc_shell_output", HdcShellOutput {
                                 connect_key: ck_stderr.clone(),
-                                data,
-                            },
-                        );
+                                data: std::mem::take(&mut accum),
+                            });
+                        }
+                        break;
+                    }
+                    Ok(Ok(n)) => {
+                        accum.push_str(&decode_process_output(&buf[..n]));
+                        if last_emit.elapsed() >= coalesce {
+                            if !accum.is_empty() {
+                                let _ = app_stderr.emit("hdc_shell_output", HdcShellOutput {
+                                    connect_key: ck_stderr.clone(),
+                                    data: std::mem::take(&mut accum),
+                                });
+                            }
+                            last_emit = Instant::now();
+                        }
+                    }
+                    Err(_) => {
+                        if !accum.is_empty() {
+                            let _ = app_stderr.emit("hdc_shell_output", HdcShellOutput {
+                                connect_key: ck_stderr.clone(),
+                                data: std::mem::take(&mut accum),
+                            });
+                            last_emit = Instant::now();
+                        }
                     }
                 }
             }
@@ -170,20 +194,41 @@ pub async fn start_shell_stream(
     tokio::spawn(async move {
         if let Some(mut stdout) = child.stdout.take() {
             let mut buf = vec![0u8; 8192];
+            let mut accum = String::new();
+            let mut last_emit = Instant::now();
+            let coalesce = Duration::from_millis(16);
             loop {
-                match stdout.read(&mut buf).await {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        let data = decode_process_output(&buf[..n]);
-                        let _ = app.emit(
-                            "hdc_shell_output",
-                            HdcShellOutput {
+                match tokio::time::timeout(coalesce, stdout.read(&mut buf)).await {
+                    Ok(Ok(0)) | Ok(Err(_)) => {
+                        if !accum.is_empty() {
+                            let _ = app.emit("hdc_shell_output", HdcShellOutput {
                                 connect_key: connect_key_owned.clone(),
-                                data,
-                            },
-                        );
+                                data: std::mem::take(&mut accum),
+                            });
+                        }
+                        break;
                     }
-                    Err(_) => break,
+                    Ok(Ok(n)) => {
+                        accum.push_str(&decode_process_output(&buf[..n]));
+                        if last_emit.elapsed() >= coalesce {
+                            if !accum.is_empty() {
+                                let _ = app.emit("hdc_shell_output", HdcShellOutput {
+                                    connect_key: connect_key_owned.clone(),
+                                    data: std::mem::take(&mut accum),
+                                });
+                            }
+                            last_emit = Instant::now();
+                        }
+                    }
+                    Err(_) => {
+                        if !accum.is_empty() {
+                            let _ = app.emit("hdc_shell_output", HdcShellOutput {
+                                connect_key: connect_key_owned.clone(),
+                                data: std::mem::take(&mut accum),
+                            });
+                            last_emit = Instant::now();
+                        }
+                    }
                 }
             }
         }
@@ -201,8 +246,9 @@ pub async fn start_shell_stream(
             },
         );
 
-        let mut procs = HDC_SHELL_PROCESSES.lock().unwrap();
-        procs.remove(&format!("hdc_shell:{}", connect_key_owned));
+        if let Ok(mut procs) = HDC_SHELL_PROCESSES.lock() {
+            procs.remove(&format!("hdc_shell:{}", connect_key_owned));
+        }
     });
 
     Ok(())
