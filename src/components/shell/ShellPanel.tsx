@@ -34,6 +34,7 @@ interface TermEntry {
   terminal: Terminal;
   fitAddon: FitAddon;
   div: HTMLDivElement;
+  resizeObserver: ResizeObserver;
 }
 
 function countNewlines(s: string): number {
@@ -85,6 +86,15 @@ export function ShellPanel() {
   const termMapRef = useRef(new Map<string, TermEntry>());
   const termContainerRef = useRef<HTMLDivElement>(null);
 
+  const disposeTerm = useCallback((id: string) => {
+    const entry = termMapRef.current.get(id);
+    if (!entry) return;
+    entry.resizeObserver.disconnect();
+    entry.terminal.dispose();
+    entry.div.remove();
+    termMapRef.current.delete(id);
+  }, []);
+
   const [input, setInput] = useState("");
   const [running, setRunning] = useState(false);
   const [stopping, setStopping] = useState(false);
@@ -124,12 +134,7 @@ export function ShellPanel() {
         delete runningMap.current[id];
         delete logFileMap.current[id];
         delete stoppingMap.current[id];
-        const entry = termMapRef.current.get(id);
-        if (entry) {
-          entry.terminal.dispose();
-          entry.div.remove();
-          termMapRef.current.delete(id);
-        }
+        disposeTerm(id);
       }
     }
     prevDeviceIds.current = currentIds;
@@ -149,8 +154,14 @@ export function ShellPanel() {
     const existing = termMapRef.current.get(deviceId);
     if (existing) return existing;
 
+    // Absolute positioning avoids height:100% not resolving in flex containers.
     const div = document.createElement("div");
-    div.style.cssText = "height:100%;display:none;";
+    div.style.cssText = "position:absolute;inset:0;padding:6px 8px;box-sizing:border-box;display:none;";
+
+    // Separate mount point so fitAddon measures size excluding outer padding.
+    const innerDiv = document.createElement("div");
+    innerDiv.style.cssText = "width:100%;height:100%;";
+    div.appendChild(innerDiv);
     termContainerRef.current.appendChild(div);
 
     const scrollback = maxLinesRef.current > 0 ? maxLinesRef.current : 50000;
@@ -167,29 +178,24 @@ export function ShellPanel() {
     });
     const fitAddon = new FitAddon();
     terminal.loadAddon(fitAddon);
-    terminal.open(div);
-    fitAddon.fit();
+    terminal.open(innerDiv);
 
-    // Replay buffered raw text (accumulated while device was not selected)
+    // Per-terminal observer — avoids the race of a global observer that depends
+    // on termContainerRef existing at first-mount time.
+    const resizeObserver = new ResizeObserver(() => {
+      // Skip hidden terminals (only the active one is display:block)
+      if (div.style.display !== "none") fitAddon.fit();
+    });
+    resizeObserver.observe(innerDiv);
+
     const buffered = rawChunksMap.current[deviceId] ?? [];
     if (buffered.length > 0) {
       for (const chunk of buffered) terminal.write(chunk.text);
     }
 
-    const entry: TermEntry = { terminal, fitAddon, div };
+    const entry: TermEntry = { terminal, fitAddon, div, resizeObserver };
     termMapRef.current.set(deviceId, entry);
     return entry;
-  }, []);
-
-  // ResizeObserver to auto-fit the active terminal when the container resizes
-  useEffect(() => {
-    if (!termContainerRef.current) return;
-    const observer = new ResizeObserver(() => {
-      const id = selectedDeviceIdRef.current;
-      if (id) termMapRef.current.get(id)?.fitAddon.fit();
-    });
-    observer.observe(termContainerRef.current);
-    return () => observer.disconnect();
   }, []);
 
   // On device switch: hide old terminal, show (or create) new terminal
@@ -210,8 +216,12 @@ export function ShellPanel() {
       const entry = getOrCreateTerm(selectedDeviceId);
       if (entry) {
         entry.div.style.display = "block";
-        entry.fitAddon.fit();
-        entry.terminal.scrollToBottom();
+        // Defer to next frame so layout settles before scrolling.
+        // ResizeObserver handles fit(); we only need scrollToBottom here.
+        requestAnimationFrame(() => {
+          if (!termMapRef.current.has(selectedDeviceId)) return; // disposed
+          entry.terminal.scrollToBottom();
+        });
       }
     }
   }, [selectedDeviceId, getOrCreateTerm]);
@@ -219,13 +229,9 @@ export function ShellPanel() {
   // Dispose all terminals on unmount
   useEffect(() => {
     return () => {
-      for (const { terminal, div } of termMapRef.current.values()) {
-        terminal.dispose();
-        div.remove();
-      }
-      termMapRef.current.clear();
+      for (const id of termMapRef.current.keys()) disposeTerm(id);
     };
-  }, []);
+  }, [disposeTerm]);
 
   const writeToDeviceBuffer = useCallback((deviceId: string, text: string) => {
     const lineCount = countNewlines(text);
@@ -597,6 +603,7 @@ export function ShellPanel() {
             ref={termContainerRef}
             style={{
               flex: 1,
+              position: "relative",
               overflow: "hidden",
               background: XTERM_THEME.background,
             }}
