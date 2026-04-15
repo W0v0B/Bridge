@@ -1,3 +1,5 @@
+import type { LogEntry, LogFilter } from "./log";
+
 export interface OhosDevice {
   connect_key: string;
   conn_type: string; // "USB" | "TCP"
@@ -7,19 +9,8 @@ export interface OhosDevice {
   remount_info: string; // empty = attempt still in progress
 }
 
-export interface HilogEntry {
-  timestamp: string;
-  pid: string;
-  tid: string;
-  level: string;
-  tag: string; // "DOMAIN/Tag" format, e.g. "A03200/testTag"
-  message: string;
-}
-
-export interface HilogFilter {
-  level: string | null;
-  keyword: string | null;
-}
+export type HilogEntry = LogEntry;
+export type HilogFilter = LogFilter;
 
 export interface HilogBatch {
   connect_key: string;

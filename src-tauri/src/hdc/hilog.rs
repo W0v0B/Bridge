@@ -1,14 +1,13 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
-use std::time::Duration;
 
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncBufReadExt, BufReader};
+use crate::log_stream::batch_stream_loop;
 use crate::util::{cmd, decode_process_output};
-use tokio::time::Instant;
 
 use super::commands::hdc_path;
 
@@ -51,8 +50,6 @@ static HILOG_PROCESSES: Lazy<Mutex<HashMap<String, u32>>> =
 
 // HiLog line format:
 //   MM-DD HH:MM:SS.mmm  PID  TID L DOMAIN/Tag: message
-// Example:
-//   04-19 17:02:14.735  5394  5394 I A03200/testTag: this is a info level hilog
 static HILOG_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
         r"^(\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+)\s+(\d+)\s+(\d+)\s+([DIWEF])\s+([^\s:][^:]*?):\s*(.*)"
@@ -73,7 +70,6 @@ fn parse_hilog_line(line: &str) -> Option<HilogEntry> {
 }
 
 /// Parse a tlogcat line with fallback: unparseable non-empty lines become INFO entries.
-/// This ensures error messages like "/bin/sh: tlogcat: inaccessible or not found" are shown.
 fn parse_tlogcat_line(line: &str) -> Option<HilogEntry> {
     if let Some(entry) = parse_hilog_line(line) {
         return Some(entry);
@@ -92,7 +88,7 @@ fn parse_tlogcat_line(line: &str) -> Option<HilogEntry> {
     })
 }
 
-/// `keyword_lower` is pre-lowercased by the caller to avoid repeated allocations per line.
+/// Check if a hilog entry passes the given filter.
 fn passes_filter(entry: &HilogEntry, filter: &HilogFilter, keyword_lower: Option<&str>) -> bool {
     if let Some(ref min_level) = filter.level {
         let levels = ["D", "I", "W", "E", "F"];
@@ -143,7 +139,6 @@ pub async fn start(
     }
 
     let connect_key_owned = connect_key.to_string();
-    // Pre-lowercase keyword once so passes_filter doesn't re-allocate per line
     let keyword_lower: Option<String> = filter.keyword.as_ref()
         .filter(|k| !k.is_empty())
         .map(|k| k.to_lowercase());
@@ -179,62 +174,20 @@ pub async fn start(
     tokio::spawn(async move {
         if let Some(stdout) = child.stdout.take() {
             let reader = BufReader::new(stdout);
-            let mut lines = reader.lines();
-            let mut batch: Vec<HilogEntry> = Vec::with_capacity(64);
-            let mut last_flush = Instant::now();
-            let flush_interval = Duration::from_millis(50);
             let kw = keyword_lower.as_deref();
+            let ck_ref = &connect_key_owned;
 
-            loop {
-                let maybe_line = tokio::time::timeout(flush_interval, lines.next_line()).await;
-
-                match maybe_line {
-                    Ok(Ok(Some(line))) => {
-                        if let Some(entry) = parse_hilog_line(&line) {
-                            if passes_filter(&entry, &filter, kw) {
-                                batch.push(entry);
-                            }
-                        }
-                        if batch.len() >= 64 || last_flush.elapsed() >= flush_interval {
-                            if !batch.is_empty() {
-                                let _ = app.emit("hilog_lines", HilogBatch {
-                                    connect_key: connect_key_owned.clone(),
-                                    entries: std::mem::take(&mut batch),
-                                });
-                            }
-                            last_flush = Instant::now();
-                        }
-                    }
-                    Ok(Ok(None)) => {
-                        if !batch.is_empty() {
-                            let _ = app.emit("hilog_lines", HilogBatch {
-                                connect_key: connect_key_owned.clone(),
-                                entries: batch,
-                            });
-                        }
-                        break;
-                    }
-                    Ok(Err(_)) => {
-                        if !batch.is_empty() {
-                            let _ = app.emit("hilog_lines", HilogBatch {
-                                connect_key: connect_key_owned.clone(),
-                                entries: batch,
-                            });
-                        }
-                        break;
-                    }
-                    Err(_) => {
-                        // Timeout — flush partial batch
-                        if !batch.is_empty() {
-                            let _ = app.emit("hilog_lines", HilogBatch {
-                                connect_key: connect_key_owned.clone(),
-                                entries: std::mem::take(&mut batch),
-                            });
-                            last_flush = Instant::now();
-                        }
-                    }
-                }
-            }
+            batch_stream_loop(
+                reader,
+                parse_hilog_line,
+                Some(move |entry: &HilogEntry| passes_filter(entry, &filter, kw)),
+                |entries| {
+                    let _ = app.emit("hilog_lines", HilogBatch {
+                        connect_key: ck_ref.clone(),
+                        entries,
+                    });
+                },
+            ).await;
         }
 
         let exit_status = child.wait().await.ok();
@@ -289,7 +242,6 @@ pub async fn clear(connect_key: &str) -> Result<(), String> {
 }
 
 /// Start tlogcat streaming for an OHOS device, emitting `hdc_tlogcat_lines` events.
-/// tlogcat on OHOS is accessed via `hdc -t <key> shell tlogcat`.
 pub async fn start_tlogcat(
     connect_key: &str,
     app: AppHandle,
@@ -350,59 +302,19 @@ pub async fn start_tlogcat(
     tokio::spawn(async move {
         if let Some(stdout) = child.stdout.take() {
             let reader = BufReader::new(stdout);
-            let mut lines = reader.lines();
-            let mut batch: Vec<HilogEntry> = Vec::with_capacity(64);
-            let mut last_flush = Instant::now();
-            let flush_interval = Duration::from_millis(50);
+            let ck_ref = &connect_key_owned;
 
-            loop {
-                let maybe_line = tokio::time::timeout(flush_interval, lines.next_line()).await;
-
-                match maybe_line {
-                    Ok(Ok(Some(line))) => {
-                        if let Some(entry) = parse_tlogcat_line(&line) {
-                            batch.push(entry);
-                        }
-                        if batch.len() >= 64 || last_flush.elapsed() >= flush_interval {
-                            if !batch.is_empty() {
-                                let _ = app.emit("hdc_tlogcat_lines", HilogBatch {
-                                    connect_key: connect_key_owned.clone(),
-                                    entries: std::mem::take(&mut batch),
-                                });
-                            }
-                            last_flush = Instant::now();
-                        }
-                    }
-                    Ok(Ok(None)) => {
-                        if !batch.is_empty() {
-                            let _ = app.emit("hdc_tlogcat_lines", HilogBatch {
-                                connect_key: connect_key_owned.clone(),
-                                entries: batch,
-                            });
-                        }
-                        break;
-                    }
-                    Ok(Err(_)) => {
-                        if !batch.is_empty() {
-                            let _ = app.emit("hdc_tlogcat_lines", HilogBatch {
-                                connect_key: connect_key_owned.clone(),
-                                entries: batch,
-                            });
-                        }
-                        break;
-                    }
-                    Err(_) => {
-                        // Timeout — flush partial batch
-                        if !batch.is_empty() {
-                            let _ = app.emit("hdc_tlogcat_lines", HilogBatch {
-                                connect_key: connect_key_owned.clone(),
-                                entries: std::mem::take(&mut batch),
-                            });
-                            last_flush = Instant::now();
-                        }
-                    }
-                }
-            }
+            batch_stream_loop(
+                reader,
+                parse_tlogcat_line,
+                None::<fn(&HilogEntry) -> bool>,
+                |entries| {
+                    let _ = app.emit("hdc_tlogcat_lines", HilogBatch {
+                        connect_key: ck_ref.clone(),
+                        entries,
+                    });
+                },
+            ).await;
         }
 
         let exit_status = child.wait().await.ok();
@@ -473,8 +385,8 @@ pub async fn export(entries: Vec<HilogEntry>, path: String) -> Result<(), String
         .iter()
         .map(|e| {
             format!(
-                "{} {} {} {}: {}",
-                e.timestamp, e.pid, e.tid, e.tag, e.message
+                "{} {} {} {}/{}: {}",
+                e.timestamp, e.pid, e.tid, e.level, e.tag, e.message
             )
         })
         .collect::<Vec<_>>()

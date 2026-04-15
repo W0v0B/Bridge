@@ -1,14 +1,13 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
-use std::time::Duration;
 
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncBufReadExt, BufReader};
+use crate::log_stream::batch_stream_loop;
 use crate::util::{cmd, decode_process_output};
-use tokio::time::Instant;
 
 use super::commands::adb_path;
 
@@ -70,11 +69,9 @@ fn parse_logcat_line(line: &str) -> Option<LogEntry> {
 }
 
 fn parse_tlogcat_line(line: &str) -> Option<LogEntry> {
-    // Try threadtime first
     if let Some(entry) = parse_logcat_line(line) {
         return Some(entry);
     }
-    // Try brief format
     if let Some(caps) = BRIEF_RE.captures(line) {
         return Some(LogEntry {
             timestamp: String::new(),
@@ -85,7 +82,6 @@ fn parse_tlogcat_line(line: &str) -> Option<LogEntry> {
             message: caps[4].to_string(),
         });
     }
-    // Fall back: treat entire line as INFO message
     let trimmed = line.trim();
     if trimmed.is_empty() {
         return None;
@@ -101,9 +97,7 @@ fn parse_tlogcat_line(line: &str) -> Option<LogEntry> {
 }
 
 /// Check if a log entry passes the given filter.
-/// `keyword_lower` is the pre-lowercased keyword (avoids repeated `.to_lowercase()` per line).
 fn passes_filter(entry: &LogEntry, filter: &LogcatFilter, keyword_lower: Option<&str>) -> bool {
-    // Level threshold
     if let Some(ref min_level) = filter.level {
         let levels = ["V", "D", "I", "W", "E", "F"];
         let min_idx = levels.iter().position(|&l| l == min_level.as_str()).unwrap_or(0);
@@ -112,13 +106,11 @@ fn passes_filter(entry: &LogEntry, filter: &LogcatFilter, keyword_lower: Option<
             return false;
         }
     }
-    // Tag whitelist
     if let Some(ref tags) = filter.tags {
         if !tags.is_empty() && !tags.iter().any(|t| entry.tag.contains(t.as_str())) {
             return false;
         }
     }
-    // Keyword search — keyword is pre-lowercased by caller
     if let Some(kw) = keyword_lower {
         if !kw.is_empty()
             && !entry.message.to_lowercase().contains(kw)
@@ -130,7 +122,7 @@ fn passes_filter(entry: &LogEntry, filter: &LogcatFilter, keyword_lower: Option<
     true
 }
 
-/// Start logcat streaming for a device, emitting `logcat_line` events.
+/// Start logcat streaming for a device, emitting `logcat_lines` events.
 pub async fn start(
     serial: &str,
     filter: LogcatFilter,
@@ -138,7 +130,6 @@ pub async fn start(
 ) -> Result<(), String> {
     let key = format!("logcat:{}", serial);
 
-    // Stop existing if running
     {
         let procs = LOGCAT_PROCESSES.lock().map_err(|e| e.to_string())?;
         if procs.contains_key(&key) {
@@ -161,7 +152,6 @@ pub async fn start(
     }
 
     let serial_owned = serial.to_string();
-    // Pre-lowercase keyword once so passes_filter doesn't re-allocate per line
     let keyword_lower: Option<String> = filter.keyword.as_ref()
         .filter(|k| !k.is_empty())
         .map(|k| k.to_lowercase());
@@ -169,68 +159,22 @@ pub async fn start(
     tokio::spawn(async move {
         if let Some(stdout) = child.stdout.take() {
             let reader = BufReader::new(stdout);
-            let mut lines = reader.lines();
-            let mut batch: Vec<LogEntry> = Vec::with_capacity(64);
-            let mut last_flush = Instant::now();
-            let flush_interval = Duration::from_millis(50);
             let kw = keyword_lower.as_deref();
+            let serial_ref = &serial_owned;
 
-            loop {
-                // Use a timeout so we flush partial batches promptly
-                let maybe_line = tokio::time::timeout(flush_interval, lines.next_line()).await;
-
-                match maybe_line {
-                    Ok(Ok(Some(line))) => {
-                        if let Some(entry) = parse_logcat_line(&line) {
-                            if passes_filter(&entry, &filter, kw) {
-                                batch.push(entry);
-                            }
-                        }
-                        // Flush when batch is large enough or interval elapsed
-                        if batch.len() >= 64 || last_flush.elapsed() >= flush_interval {
-                            if !batch.is_empty() {
-                                let _ = app.emit("logcat_lines", LogcatBatch {
-                                    serial: serial_owned.clone(),
-                                    entries: std::mem::take(&mut batch),
-                                });
-                            }
-                            last_flush = Instant::now();
-                        }
-                    }
-                    Ok(Ok(None)) => {
-                        // EOF
-                        if !batch.is_empty() {
-                            let _ = app.emit("logcat_lines", LogcatBatch {
-                                serial: serial_owned.clone(),
-                                entries: batch,
-                            });
-                        }
-                        break;
-                    }
-                    Ok(Err(_)) => {
-                        if !batch.is_empty() {
-                            let _ = app.emit("logcat_lines", LogcatBatch {
-                                serial: serial_owned.clone(),
-                                entries: batch,
-                            });
-                        }
-                        break;
-                    }
-                    Err(_) => {
-                        // Timeout — flush whatever we have
-                        if !batch.is_empty() {
-                            let _ = app.emit("logcat_lines", LogcatBatch {
-                                serial: serial_owned.clone(),
-                                entries: std::mem::take(&mut batch),
-                            });
-                            last_flush = Instant::now();
-                        }
-                    }
-                }
-            }
+            batch_stream_loop(
+                reader,
+                parse_logcat_line,
+                Some(move |entry: &LogEntry| passes_filter(entry, &filter, kw)),
+                |entries| {
+                    let _ = app.emit("logcat_lines", LogcatBatch {
+                        serial: serial_ref.clone(),
+                        entries,
+                    });
+                },
+            ).await;
         }
 
-        // Clean up when process exits
         if let Ok(mut procs) = LOGCAT_PROCESSES.lock() {
             procs.remove(&format!("logcat:{}", serial_owned));
         }
@@ -248,7 +192,6 @@ pub async fn stop(serial: &str) -> Result<(), String> {
     };
 
     if let Some(pid) = pid {
-        // On Windows, use taskkill with /T to kill the process tree
         let _ = cmd("taskkill")
             .args(["/F", "/T", "/PID", &pid.to_string()])
             .output()
@@ -259,7 +202,7 @@ pub async fn stop(serial: &str) -> Result<(), String> {
     }
 }
 
-/// Start tlogcat (TEE log) streaming for a device, emitting `tlogcat_line` events.
+/// Start tlogcat (TEE log) streaming for a device, emitting `tlogcat_lines` events.
 pub async fn start_tlogcat(
     serial: &str,
     app: AppHandle,
@@ -320,58 +263,19 @@ pub async fn start_tlogcat(
     tokio::spawn(async move {
         if let Some(stdout) = child.stdout.take() {
             let reader = BufReader::new(stdout);
-            let mut lines = reader.lines();
-            let mut batch: Vec<LogEntry> = Vec::with_capacity(64);
-            let mut last_flush = Instant::now();
-            let flush_interval = Duration::from_millis(50);
+            let serial_ref = &serial_owned;
 
-            loop {
-                let maybe_line = tokio::time::timeout(flush_interval, lines.next_line()).await;
-
-                match maybe_line {
-                    Ok(Ok(Some(line))) => {
-                        if let Some(entry) = parse_tlogcat_line(&line) {
-                            batch.push(entry);
-                        }
-                        if batch.len() >= 64 || last_flush.elapsed() >= flush_interval {
-                            if !batch.is_empty() {
-                                let _ = app.emit("tlogcat_lines", LogcatBatch {
-                                    serial: serial_owned.clone(),
-                                    entries: std::mem::take(&mut batch),
-                                });
-                            }
-                            last_flush = Instant::now();
-                        }
-                    }
-                    Ok(Ok(None)) => {
-                        if !batch.is_empty() {
-                            let _ = app.emit("tlogcat_lines", LogcatBatch {
-                                serial: serial_owned.clone(),
-                                entries: batch,
-                            });
-                        }
-                        break;
-                    }
-                    Ok(Err(_)) => {
-                        if !batch.is_empty() {
-                            let _ = app.emit("tlogcat_lines", LogcatBatch {
-                                serial: serial_owned.clone(),
-                                entries: batch,
-                            });
-                        }
-                        break;
-                    }
-                    Err(_) => {
-                        if !batch.is_empty() {
-                            let _ = app.emit("tlogcat_lines", LogcatBatch {
-                                serial: serial_owned.clone(),
-                                entries: std::mem::take(&mut batch),
-                            });
-                            last_flush = Instant::now();
-                        }
-                    }
-                }
-            }
+            batch_stream_loop(
+                reader,
+                parse_tlogcat_line,
+                None::<fn(&LogEntry) -> bool>,
+                |entries| {
+                    let _ = app.emit("tlogcat_lines", LogcatBatch {
+                        serial: serial_ref.clone(),
+                        entries,
+                    });
+                },
+            ).await;
         }
 
         if let Ok(mut procs) = LOGCAT_PROCESSES.lock() {

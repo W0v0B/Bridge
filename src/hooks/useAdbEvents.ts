@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useDeviceStore } from "../store/deviceStore";
 import { getDevices, isAdbScreenCaptureRunning } from "../utils/adb";
-import type { AdbDevice, TransferProgress, LogcatBatch, ScrcpyState, AdbScreenFrame, AdbScreenCaptureState } from "../types/adb";
+import type { AdbDevice, TransferProgress, ScrcpyState, AdbScreenFrame, AdbScreenCaptureState } from "../types/adb";
 
 export function useDeviceEvents() {
   const syncAdbDevices = useDeviceStore((s) => s.syncAdbDevices);
@@ -32,36 +32,6 @@ export function useTransferEvents(
 
   useEffect(() => {
     const unlisten = listen<TransferProgress>("transfer_progress", (event) => {
-      callbackRef.current(event.payload);
-    });
-
-    return () => {
-      unlisten.then((fn) => fn());
-    };
-  }, []);
-}
-
-export function useLogcatEvents(onBatch: (batch: LogcatBatch) => void) {
-  const callbackRef = useRef(onBatch);
-  callbackRef.current = onBatch;
-
-  useEffect(() => {
-    const unlisten = listen<LogcatBatch>("logcat_lines", (event) => {
-      callbackRef.current(event.payload);
-    });
-
-    return () => {
-      unlisten.then((fn) => fn());
-    };
-  }, []);
-}
-
-export function useTlogcatEvents(onBatch: (batch: LogcatBatch) => void) {
-  const callbackRef = useRef(onBatch);
-  callbackRef.current = onBatch;
-
-  useEffect(() => {
-    const unlisten = listen<LogcatBatch>("tlogcat_lines", (event) => {
       callbackRef.current(event.payload);
     });
 

@@ -28,14 +28,8 @@ export interface TransferProgress {
   speed: string;
 }
 
-export interface LogEntry {
-  timestamp: string;
-  pid: string;
-  tid: string;
-  level: string;
-  tag: string;
-  message: string;
-}
+import type { LogEntry, LogFilter } from "./log";
+export type { LogEntry, LogFilter };
 
 export interface LogcatFilter {
   level: string | null;

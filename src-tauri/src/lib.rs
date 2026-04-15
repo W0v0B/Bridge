@@ -2,6 +2,7 @@ mod adb;
 mod hdc;
 mod serial;
 mod config;
+mod log_stream;
 pub mod util;
 
 use base64::Engine as _;

@@ -78,3 +78,10 @@ html, body {
   height: 100%;
   position: relative;
 }
+
+/* Log level colors (used by LogPanel virtual rows) */
+.log-v { color: #8c8c8c; }
+.log-d { color: #1677ff; }
+.log-i { color: #52c41a; }
+.log-w { color: #faad14; }
+.log-e { color: #ff4d4f; }
